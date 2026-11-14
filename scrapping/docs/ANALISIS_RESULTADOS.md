@@ -1,5 +1,7 @@
 # Errores y utilidad de las fuentes extraídas
 
+Continuación: [segunda pasada consolidada, evidencia preparada y pendientes del MVP 0](SEGUNDA_PASADA.md).
+
 Revisión del 14 de noviembre de 2026. Punto de partida: tu ejecución `20261114T163415819391Z`. Se repitieron las ocho fuentes problemáticas después del cambio de red reportado y se revisó el contenido de las fuentes recuperadas.
 
 **Resultado actual: 11 fuentes con texto extraído, 6 con limitaciones, 27 pasajes candidatos y 293 enlaces.** Hay 17 URLs en total. Las dos recuperaciones adicionales son RCM y RADARSAT-1. No se ha descargado ni comparado un producto científico terrestre con uno planetario.

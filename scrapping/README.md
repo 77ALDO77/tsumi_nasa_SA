@@ -6,6 +6,8 @@ Código, pruebas, dependencias, inventario, resultados y análisis están en est
 
 Validación: 24 pruebas aprobadas, dependencias compatibles y reproducción idéntica de documentos, pasajes y cobertura desde esta ubicación.
 
+[Segunda pasada consolidada y preparación del MVP 0](docs/SEGUNDA_PASADA.md): usa la descarga reciente y recupera Mojave desde su copia completa anterior. Incluye cinco registros documentales con trazabilidad y revisión humana pendiente.
+
 ## Ejecutar desde la raíz del proyecto
 
 Con el entorno que ya tienes activado, el comando actualizado es:
