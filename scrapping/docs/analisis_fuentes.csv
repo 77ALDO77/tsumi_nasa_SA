@@ -1,0 +1,18 @@
+﻿source_id,fuente,estado_anterior,estado_actual,segmentos,caracteres_extraidos,enlaces,pasajes_exportados,pasajes_antes_limite,paginas_pdf
+fe2b9bafe94dfdc3,Earthdata Search,requiere_javascript_o_api,requiere_javascript_o_api,10,361,9,0,0,
+124b977ee562a8e9,Worldview,robots_no_disponible,robots_no_disponible,0,0,0,0,,
+c15bdbc8132781b7,PDS,extraido,extraido,17,2893,5,0,0,
+f12c686891fa808f,LRO,extraido,extraido,60,3697,27,0,0,
+f2356e0a838fe278,Diviner,extraido,extraido,38,2616,24,0,0,
+377864b609d2fdb9,RCM,error_red,extraido,101,6506,20,1,1,
+e1c6da9e6c0670c6,RADARSAT-1,error_red,extraido,105,4666,19,0,0,
+9024ad3006d542d7,Tutorial SAR de CSA,extraido,extraido,85,6284,9,0,0,
+cdd333032af490b3,Copernicus Data Space,extraido,extraido,59,4007,52,0,0,
+d378674983324437,ESA Open Science Catalogue,robots_no_disponible,robots_no_disponible,0,0,0,0,,
+a7df6a3f6775188a,JAXA G-Portal,contenido_insuficiente,portal_navegacion,16,366,17,0,0,
+61079a9623a27858,"Yungay, desierto de Atacama",bloqueo_acceso,bloqueo_acceso,0,0,0,0,,
+78c732036d4e58a3,"University Valley, Antártida",extraido,extraido,16,1541,85,3,3,
+0229617acb8470d0,"Desierto de Mojave, sur de California",extraido,extraido,117,102152,0,20,120,123
+3dd78a02b731e1b7,Caso NASA JETT3,extraido,extraido,26,5307,7,0,0,
+24dd0fcdf7859a4b,NASA Analog Explorer,extraido,extraido,65,2957,19,3,3,
+4d9b9d548760da13,PTAL,bloqueo_acceso,bloqueo_acceso,0,0,0,0,,

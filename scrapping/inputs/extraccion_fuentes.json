@@ -1,0 +1,109 @@
+{
+  "consulta": "2026-11-14",
+  "metodo": "Lectura de URLs de resources.txt y extracción web documental. Se retiraron parámetros de seguimiento. Hallazgos de estudios revisados por pasaje. Pendiente la descarga de productos y la reproducción de los cálculos.",
+  "inventario": [
+    {
+      "fuente": "Earthdata Search",
+      "url": "https://search.earthdata.nasa.gov/",
+      "estado": "portada_sin_contenido_cientifico_extraible",
+      "hallazgo": "La página solicita JavaScript y enlaza Earthdata Access."
+    },
+    {
+      "fuente": "Worldview",
+      "url": "https://worldview.earthdata.nasa.gov/index.html",
+      "estado": "portada_sin_contenido_cientifico_extraible",
+      "hallazgo": "La extracción HTML del visor solo devolvió un iframe."
+    },
+    {
+      "fuente": "PDS",
+      "url": "https://pds.nasa.gov/",
+      "estado": "legible",
+      "hallazgo": "Índice de búsqueda de datos, herramientas y estándares."
+    },
+    {
+      "fuente": "LRO",
+      "url": "https://pds-geosciences.wustl.edu/missions/lro/",
+      "estado": "legible",
+      "hallazgo": "Índice documental de la misión y enlaces a instrumentos."
+    },
+    {
+      "fuente": "Diviner",
+      "url": "https://pds-geosciences.wustl.edu/missions/lro/diviner.htm",
+      "estado": "legible",
+      "hallazgo": "Nota sobre RDR: el campo tb de la columna 24 usa -9999 para temperatura de brillo ausente. Índice de productos polares PCP y PRP."
+    },
+    {
+      "fuente": "RCM",
+      "url": "https://donnees-data.asc-csa.gc.ca/en/dataset/rcm",
+      "estado": "timeout",
+      "hallazgo": "Tiempo de espera agotado al consultar la ficha."
+    },
+    {
+      "fuente": "RADARSAT-1",
+      "url": "https://donnees-data.asc-csa.gc.ca/en/dataset/radarsat1",
+      "estado": "timeout",
+      "hallazgo": "Tiempo de espera agotado al consultar la ficha."
+    },
+    {
+      "fuente": "Tutorial SAR de CSA",
+      "url": "https://github.com/asc-csa/Synthetic_Aperture_Radar_Tutorial",
+      "estado": "legible",
+      "hallazgo": "Repositorio con ejemplos de imágenes SAR para Python y QGIS."
+    },
+    {
+      "fuente": "Copernicus Data Space",
+      "url": "https://dataspace.copernicus.eu/",
+      "estado": "legible",
+      "hallazgo": "Índice de misiones Sentinel, APIs y navegador STAC."
+    },
+    {
+      "fuente": "ESA Open Science Catalogue",
+      "url": "https://opensciencedata.esa.int/",
+      "estado": "portada_sin_contenido_cientifico_extraible",
+      "hallazgo": "Portada sin líneas de texto legibles en esta consulta."
+    },
+    {
+      "fuente": "JAXA G-Portal",
+      "url": "https://www.gportal.jaxa.jp/?lang=en",
+      "estado": "legible",
+      "hallazgo": "Índice de búsqueda por sensor o magnitud física, con servicios CSW/SFTP."
+    }
+  ],
+  "antecedentes": [
+    {
+      "lugar": "Yungay, desierto de Atacama",
+      "referencia": "Karatepe, cráter Endurance, Marte",
+      "variables": [
+        "suelo",
+        "minerales"
+      ],
+      "medicion": "Distribución de sulfatos y cloro por profundidad. El estudio compara tendencias entre perfiles.",
+      "localizador": "Párrafo 15 y figuras 4a–b. Figura 5a para química del perfil terrestre.",
+      "url": "https://doi.org/10.1029/2006JG000313",
+      "limite": "Para comparar valores numéricos, verificar unidades y distinguir azufre elemental de sulfato. Una tendencia compartida admite más de una explicación."
+    },
+    {
+      "lugar": "University Valley, Antártida",
+      "referencia": "Hielo subsuperficial marciano como hipótesis de comparación",
+      "variables": [
+        "hielo",
+        "permafrost"
+      ],
+      "medicion": "La profundidad hasta el terreno cementado por hielo en University Valley varió entre 0 y 98 cm.",
+      "localizador": "Resumen del artículo, Distribution of depth to ice-cemented soils.",
+      "url": "https://www.cambridge.org/core/journals/antarctic-science/article/abs/distribution-of-depth-to-icecemented-soils-in-the-highelevation-quartermain-mountains-mcmurdo-dry-valleys-antarctica/EE34F569F8E954EE4DE86125C92E3188",
+      "limite": "Intervalo de las observaciones terrestres de ese estudio. Una comparación con Phoenix requiere mediciones marcianas y escala compatibles."
+    },
+    {
+      "lugar": "Desierto de Mojave, sur de California",
+      "referencia": "Remolinos de polvo en Marte",
+      "variables": [
+        "polvo"
+      ],
+      "medicion": "La campaña midió diámetro de remolinos, velocidad del viento y temperatura por altura. Se usaron los datos terrestres para construir un modelo.",
+      "localizador": "Introducción, p. 1. Diámetro, sección 4.2.2. Aplicación a Marte, sección 5.",
+      "url": "https://ntrs.nasa.gov/api/citations/19700006387/downloads/19700006387.pdf",
+      "limite": "La parte marciana de este informe histórico es una extrapolación modelada."
+    }
+  ]
+}

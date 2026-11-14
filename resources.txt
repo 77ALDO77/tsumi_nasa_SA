@@ -1,0 +1,29 @@
+NASA Data & Resources
+Earth
+NASA's primary portal for discovering and accessing Earth science observations. Link: https://search.earthdata.nasa.gov/
+An easy-to-use interactive environment for visually exploring NASA satellite imagery and environmental observations. Link: https://worldview.earthdata.nasa.gov/index.html
+
+Moon and Mars
+NASA's long-term archive for planetary science data from NASA orbital, lander, and rover missions. It provides access to lunar and Martian mission observations spanning imagery, geoscience, atmospheres, plasma environments, cartography, and other measurements. Link: https://pds.nasa.gov/?utm_source=%27chatgpt.com%27
+LRO provides extensive observations of the lunar surface through instruments including LROC, LOLA, Diviner, LEND, Mini-RF and others. link: https://pds-geosciences.wustl.edu/missions/lro/?utm_source=%27chatgpt.com%27
+Diviner maps lunar surface temperatures and provides especially useful products for studying the lunar poles. Its polar and resource products could be compared with extreme cold, ice-bearing, or other terrestrial environments. Link: https://pds-geosciences.wustl.edu/missions/lro/diviner.htm?utm_source=%27chatgpt.com%27
+
+Space Agency Partner Resources
+
+RCM is Canada's new generation of Earth observation satellites. The RCM includes a trio of Earth observation satellites, capable of scanning Earth day or night and in any weather conditions. The RCM is designed to provide effective solutions in three main areas: Maritime surveillance (ice, surface wind, oil pollution and ship monitoring); Disaster management (mitigation, warning, response and recovery); and Ecosystem monitoring (agriculture, wetlands, forestry and coastal change monitoring). Link: https://donnees-data.asc-csa.gc.ca/en/dataset/rcm
+Launched in November 1995, RADARSAT-1 provided Canada and the world with an operational radar satellite system capable of timely delivery of large amounts of data. Equipped with a powerful synthetic aperture radar (SAR) instrument, it acquired images of the Earth day or night, in all weather and through cloud cover, smoke and haze. All data products in the Canadian RADARSAT-1 archive have been released under an open license. Link: https://donnees-data.asc-csa.gc.ca/en/dataset/radarsat1
+This tutorial demonstrates how to work with SAR imagery using Python and QGIS. It includes easy and practical steps for accessing and visualizing data link: https://github.com/asc-csa/Synthetic_Aperture_Radar_Tutorial
+
+ESA (European Space Agency)
+Provides free and open access to Sentinel Earth-observation data covering land, oceans, and atmosphere, with tools for visualization and processing. link: https://dataspace.copernicus.eu/?utm_source=%27chatgpt.com%27
+A catalog of publicly available geoscience datasets, products, experiments, and workflows. link: https://opensciencedata.esa.int/?utm_source=%27chatgpt.com%27
+
+JAXA (Japan Aerospace Exploration Agency)
+
+Provides Earth-observation products from JAXA missions, searchable by variables such as precipitation, snow, vegetation, etc. link: https://www.gportal.jaxa.jp/?lang=en
+
+
+
+
+
+
