@@ -41,6 +41,7 @@ Cumple el contrato de `ANALISIS-FRONTEND.md` del repo `nasa-azzu-front` sin modi
 |---|---|
 | `GET /api/sites` | `[{id, name, lat, lon, coverage}]`: los sitios terrestres registrados y hasta 30 candidatos por referencia, leídos del ranking indexado del trabajador (3/3 y filtro NDVI). El id de un candidato es `T~<celda>~<ix>~<iy>` |
 | `GET /api/sites/{id}/comparisons` | `[{id, label, variable, reference}]`: una por referencia y variable. El id es `<referencia>~<variable>` |
+| `GET /api/search/status` | Cola, registros de relieve, teselas candidatas únicas a 60 m, contexto MODIS y señales recientes de los trabajadores. Se puede consultar cada 30 s; una señal antigua no prueba que el proceso esté detenido |
 | `POST /api/analyses` `{siteId, comparisonId}` | `{id, status, result?, message?}`. Responde al momento: las métricas ya están calculadas, así que nunca queda `pending`. Si la celda del sitio aún no se procesó, devuelve `insufficient_data` con el estado de la celda |
 | `GET /api/analyses/{siteId}\|{comparisonId}` | Lo mismo |
 
@@ -51,6 +52,8 @@ En `result`:
   disponible (NDVI/LST, meses, cobertura válida, política QA y límites), las rupturas y el descargo;
 - `sources` incluye el artículo NASA de la etiqueta del sitio, LOLA, Copernicus y las URLs
   permanentes de los granulos MODIS utilizados, sin credenciales.
+- `earthContext` es opcional/nulo: meses, resolución angular, valores NDVI/LST, cobertura
+  temporal por capa y resultado del filtro NDVI. Es contexto terrestre, no otra puntuación de analogía.
 
 El ranking filtrado exige NDVI máximo ≤0,3 válido en todos los meses seleccionados
 (actualmente enero y julio de 2025). Es una heurística del equipo, no una definición NASA

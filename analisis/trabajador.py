@@ -4,6 +4,7 @@ Desde la raíz, con DATABASE_URL en el entorno:
   python -m analisis.trabajador analisis/inputs/busqueda.json referencias   # envolventes lunares
   python -m analisis.trabajador analisis/inputs/busqueda.json encolar       # celdas de las zonas
   python -m analisis.trabajador analisis/inputs/busqueda.json contexto      # MODIS (NASA) por tesela; requiere EARTHDATA_TOKEN
+  python -m analisis.trabajador analisis/inputs/busqueda.json catalogo      # nombres, roles y fuentes, sin recalcular terreno
   python -m analisis.trabajador analisis/inputs/busqueda.json una           # procesa una celda
   python -m analisis.trabajador analisis/inputs/busqueda.json bucle         # servicio: no termina
 Varios trabajadores pueden correr a la vez: cada celda se reserva con FOR UPDATE SKIP LOCKED.
@@ -13,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import time
 from pathlib import Path
 
@@ -31,6 +33,7 @@ log = configurar("trabajador")
 
 MAX_INTENTOS = 3
 _contexto = {}
+CATALOGO = Path(__file__).parent / "inputs/mvp0.json"
 
 
 def contexto(cfg):
@@ -75,6 +78,76 @@ def celda_id(lat, lon):
     return f"{'N' if lat >= 0 else 'S'}{abs(lat):02d}{'E' if lon >= 0 else 'W'}{abs(lon):03d}"
 
 
+def catalogo(conn):
+    """Solo metadatos de sitios existentes, comprobando que la coordenada no haya cambiado."""
+    for s in json.loads(CATALOGO.read_text(encoding="utf-8"))["ventanas"]:
+        previo = conn.execute("SELECT lat, lon FROM sitios WHERE sitio_id = %s", (s["id"],)).fetchone()
+        if previo is None:
+            continue
+        if previo != (s["lat"], s["lon"]):
+            raise ValueError(f"{s['id']}: coordenadas distintas; revisar antes de etiquetar")
+        conn.execute("""UPDATE sitios SET nombre=%s, rol=%s, etiquetas=%s, fuente_coordenadas=%s
+                        WHERE sitio_id=%s""",
+                     (s["nombre"], s["rol"], s["etiquetas"], s["fuente_coordenadas"], s["id"]))
+    conn.commit()
+    evento(log, "catalogo_actualizado")
+
+
+def celdas_config(cfg):
+    """Orden finito y reproducible; las zonas prioritarias prevalecen sobre la exploración amplia."""
+    celdas = {}
+    for z in sorted(cfg["zonas"], key=lambda z: z["prioridad"]):
+        bbox = z["bbox"]
+        if len(bbox) != 4 or any(type(v) is not int for v in bbox):
+            raise ValueError("Las cajas de búsqueda deben tener cuatro grados enteros")
+        lon0, lat0, lon1, lat1 = bbox
+        if not (-180 <= lon0 < lon1 <= 180 and -90 <= lat0 < lat1 <= 90):
+            raise ValueError("Caja de búsqueda fuera de la Tierra")
+        for lat in range(lat0, lat1):
+            for lon in range(lon0, lon1):
+                cid = celda_id(lat, lon)
+                celdas.setdefault(cid, (cid, lat, lon, z["nombre"], z["prioridad"]))
+    return list(celdas.values())
+
+
+def celdas_del_perfil(cfg):
+    ctx = contexto(cfg)
+    mascara = modis.celdas_elegibles(ctx, cfg["contexto_modis"]["meses"], cfg["ndvi_umbral_vegetacion"])
+    return [c for c in celdas_config(cfg) if mascara[89-c[1], c[2]+180]]
+
+
+def alimentar_cola(conn, cfg, celdas):
+    """Lotes pequeños, sin reabrir celdas hechas/error ni duplicar trabajo entre procesos."""
+    auto = cfg["auto_encolar"]
+    lote, minimo = auto["lote"], auto["minimo_pendientes"]
+    if type(lote) is not int or type(minimo) is not int or not 1 <= minimo <= lote <= 100:
+        raise ValueError("auto_encolar requiere 1 <= minimo_pendientes <= lote <= 100")
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext('tsumi:alimentar_cola'))")
+    pendientes = conn.execute("SELECT count(*) FROM celdas_busqueda WHERE estado='pendiente'").fetchone()[0]
+    if pendientes >= minimo:
+        conn.commit()
+        return 0
+    existentes = {r[0] for r in conn.execute("SELECT celda_id FROM celdas_busqueda")}
+    nuevas = [c for c in celdas if c[0] not in existentes][:lote]
+    with conn.cursor() as cur:
+        cur.executemany("""INSERT INTO celdas_busqueda (celda_id,lat_min,lon_min,zona,prioridad)
+                           VALUES (%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""", nuevas)
+        n = max(cur.rowcount, 0)
+    conn.commit()
+    if n:
+        evento(log, "lote_encolado", n=n, pendientes_antes=pendientes, elegibles=len(celdas))
+    return n
+
+
+def latido(conn, estado, celda=None, elegibles=None):
+    conn.execute("""INSERT INTO trabajadores (trabajador_id,estado,celda_id,celdas_elegibles)
+                    VALUES (%s,%s,%s,%s) ON CONFLICT (trabajador_id) DO UPDATE SET
+                    estado=EXCLUDED.estado, celda_id=EXCLUDED.celda_id,
+                    celdas_elegibles=coalesce(EXCLUDED.celdas_elegibles,trabajadores.celdas_elegibles),
+                    actualizado_utc=now()""", (socket.gethostname(), estado, celda, elegibles))
+    conn.commit()
+
+
 def referencias(conn, cfg):
     tesela_m, minimo = cfg["tesela_m"], cfg["fraccion_valida_min"]
     conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
@@ -97,21 +170,24 @@ def referencias(conn, cfg):
 
 
 def encolar(conn, cfg):
+    if cfg.get("auto_encolar"):
+        return alimentar_cola(conn, cfg, celdas_del_perfil(cfg))
     total = 0
-    for zona in cfg["zonas"]:
-        lon0, lat0, lon1, lat1 = zona["bbox"]  # grados enteros: [lon0, lon1) x [lat0, lat1)
-        for lat in range(lat0, lat1):
-            for lon in range(lon0, lon1):
-                cur = conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, prioridad)
+    for c in celdas_config(cfg):
+        cur = conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, prioridad)
                                       VALUES (%s,%s,%s,%s,%s) ON CONFLICT (celda_id) DO UPDATE
                                       SET prioridad = least(celdas_busqueda.prioridad, EXCLUDED.prioridad)""",
-                                   (celda_id(lat, lon), lat, lon, zona["nombre"], zona["prioridad"]))
-                total += cur.rowcount
+                           c)
+        total += cur.rowcount
     conn.commit()
     evento(log, "celdas_encoladas", n=total)
 
 
 def tomar(conn):
+    # Recuperación durante el bucle, no solo al reiniciar; se respeta el techo de reintentos.
+    conn.execute("""UPDATE celdas_busqueda SET estado=CASE WHEN intentos < %s THEN 'pendiente' ELSE 'error' END,
+                    error='Reserva vencida tras una hora sin terminar', actualizado_utc=now()
+                    WHERE estado='en_curso' AND actualizado_utc < now()-interval '1 hour'""", (MAX_INTENTOS,))
     row = conn.execute("""UPDATE celdas_busqueda SET estado = 'en_curso', intentos = intentos + 1, actualizado_utc = now()
                           WHERE celda_id = (SELECT celda_id FROM celdas_busqueda WHERE estado = 'pendiente'
                                             ORDER BY prioridad, celda_id FOR UPDATE SKIP LOCKED LIMIT 1)
@@ -219,7 +295,7 @@ def fallo(conn, celda, exc):
 def main():
     parser = argparse.ArgumentParser(description="Búsqueda continua de análogos por relieve.")
     parser.add_argument("config", type=Path)
-    parser.add_argument("accion", choices=["referencias", "encolar", "contexto", "una", "bucle"])
+    parser.add_argument("accion", choices=["referencias", "encolar", "contexto", "catalogo", "una", "bucle"])
     args = parser.parse_args()
     if not os.environ.get("DATABASE_URL"):
         parser.error("Falta DATABASE_URL")
@@ -230,29 +306,35 @@ def main():
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         with conn.cursor() as cur:
             aplicar_migraciones(cur)
-        # Un trabajador caído deja celdas 'en_curso': se devuelven a la cola pasada una hora.
-        devueltas = conn.execute("""UPDATE celdas_busqueda SET estado = 'pendiente' WHERE estado = 'en_curso'
-                        AND actualizado_utc < now() - interval '1 hour'""").rowcount
         conn.commit()
-        if devueltas:
-            evento(log, "celdas_recuperadas", logging.WARNING, n=devueltas)
         if args.accion == "referencias":
             return referencias(conn, cfg)
         if args.accion == "encolar":
             return encolar(conn, cfg)
         if args.accion == "contexto":
             return rellenar_contexto(conn, cfg)
+        if args.accion == "catalogo":
+            return catalogo(conn)
         comprobar_contexto(conn, cfg)
         conn.commit()
+        catalogo(conn)
+        celdas = []
+        if args.accion == "bucle" and cfg.get("auto_encolar"):
+            celdas = celdas_del_perfil(cfg)
+            latido(conn, "preparando", elegibles=len(celdas))
         while True:
+            if args.accion == "bucle" and cfg.get("auto_encolar"):
+                alimentar_cola(conn, cfg, celdas)
             celda = tomar(conn)
             if celda is None:
+                latido(conn, "agotado" if cfg.get("auto_encolar") else "esperando")
                 evento(log, "cola_vacia", espera_s=0 if args.accion == "una" else cfg["espera_cola_vacia_s"])
                 if args.accion == "una":
                     return 0
                 time.sleep(cfg["espera_cola_vacia_s"])
                 continue
             evento(log, "celda_tomada", celda=celda[0], intento=celda[3])
+            latido(conn, "procesando", celda=celda[0])
             try:
                 procesar(conn, cfg, celda)
             except (ValueError, rasterio.errors.RasterioError, psycopg.DataError) as exc:

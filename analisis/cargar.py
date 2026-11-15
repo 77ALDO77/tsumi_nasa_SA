@@ -73,11 +73,11 @@ def cargar(conn, carpeta: Path):
             extra = catalogo.get(v["id"], {})
             cur.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, nombre, rol, etiquetas)
                            VALUES (%s,%s,%s,%s,%s, CASE WHEN %s THEN ST_SetSRID(ST_MakePoint(%s,%s),4326) END, %s,%s,%s)
-                           ON CONFLICT (sitio_id) DO UPDATE SET rol = EXCLUDED.rol,
+                            ON CONFLICT (sitio_id) DO UPDATE SET rol = coalesce(nullif(EXCLUDED.rol,''), sitios.rol),
                                nombre = coalesce(EXCLUDED.nombre, sitios.nombre),
                                etiquetas = coalesce(EXCLUDED.etiquetas, sitios.etiquetas)""",
                         (v["id"], v["cuerpo"], v["lat"], v["lon"], v["fuente_coordenadas"], earth, v["lon"], v["lat"],
-                         extra.get("nombre"), v.get("rol"), extra.get("etiquetas")))
+                          extra.get("nombre"), extra.get("rol") or v.get("rol"), extra.get("etiquetas")))
             if una(cur, "SELECT lat, lon FROM sitios WHERE sitio_id=%s", (v["id"],)) != (v["lat"], v["lon"]):
                 raise ValueError(f"{v['id']}: el sitio ya existe con otras coordenadas")
             if v["estado"] == "error":

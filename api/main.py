@@ -172,8 +172,17 @@ def estado_busqueda():
         teselas = conn.execute("SELECT count(*) AS n, max(c.actualizado_utc) AS ultima FROM teselas "
                                "JOIN celdas_busqueda c USING (celda_id)").fetchone()
         errores = conn.execute("SELECT celda_id, error FROM celdas_busqueda WHERE estado = 'error' LIMIT 20").fetchall()
+        trabajadores = conn.execute("""SELECT trabajador_id,estado,celda_id,celdas_elegibles,actualizado_utc,
+                                        actualizado_utc > now()-interval '5 minutes' AS senal_reciente
+                                        FROM trabajadores ORDER BY actualizado_utc DESC LIMIT 10""").fetchall()
+        contexto = conn.execute("""SELECT contexto_id,umbral_ndvi,metadata->'meses' AS meses,
+                                  metadata->>'version' AS version_qa FROM contexto_modis""").fetchone()
+        candidatos = conn.execute("""SELECT count(*) AS n FROM (
+                                     SELECT DISTINCT celda_id,ix,iy FROM candidatos
+                                     WHERE res_m=60 AND version_metodo=%s) c""", (VERSION_POR_DEFECTO,)).fetchone()
     return {"celdas": {c["estado"]: c["n"] for c in celdas}, "teselas": teselas["n"],
-            "ultima_actualizacion": teselas["ultima"], "errores": errores}
+            "ultima_actualizacion": teselas["ultima"], "errores": errores,
+            "trabajadores": trabajadores, "contexto_nasa": contexto, "teselas_candidatas": candidatos["n"]}
 
 
 @app.get("/referencias")

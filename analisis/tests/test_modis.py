@@ -41,6 +41,14 @@ def test_aggregation_preserves_missingness_and_month_counts():
     assert out["lst_noche_min_k"][0, 0] == .2
 
 
+def test_cell_screen_requires_at_least_one_fully_observed_low_ndvi_pixel():
+    ctx = {"ndvi_max": np.full((40, 40), np.nan), "ndvi_n": np.zeros((40, 40), dtype="uint8")}
+    ctx["ndvi_max"][0, 0], ctx["ndvi_n"][0, 0] = .3, 2
+    ctx["ndvi_max"][0, 20], ctx["ndvi_n"][0, 20] = .2, 1
+    ctx["ndvi_max"][20, 0], ctx["ndvi_n"][20, 0] = .3001, 2
+    np.testing.assert_equal(modis.celdas_elegibles(ctx, ["2025-01", "2025-07"], .3), [[True, False], [False, False]])
+
+
 def test_sampling_edges_and_threshold_quantization(monkeypatch):
     monkeypatch.setattr(modis, "FORMA", (2, 4))
     monkeypatch.setattr(modis, "PASO", 90)

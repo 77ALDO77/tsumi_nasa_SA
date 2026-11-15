@@ -50,3 +50,27 @@ def test_structured_log_is_one_json_line(capsys):
     data = json.loads(line)
     assert "\n" not in line and data["evento"] == "celda_fallida" and data["celda"] == "N35W112"
     assert data["nivel"] == "error" and data["servicio"] == "prueba" and "ValueError" in data["excepcion"]
+
+
+def test_queue_cells_deduplicate_and_keep_priority(monkeypatch):
+    from analisis import trabajador
+    from analisis.trabajador import celdas_config
+    cfg = {"zonas": [
+        {"nombre": "amplia", "bbox": [0, 0, 2, 2], "prioridad": 100},
+        {"nombre": "prioritaria", "bbox": [0, 0, 1, 1], "prioridad": 1}]}
+    cells = celdas_config(cfg)
+    assert len(cells) == 4
+    assert cells[0] == ("N00E000", 0, 0, "prioritaria", 1)
+    mask = np.zeros((180, 360), dtype=bool)
+    mask[89, 180] = True
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: {})
+    monkeypatch.setattr(trabajador.modis, "celdas_elegibles", lambda *a: mask)
+    cfg.update({"contexto_modis": {"meses": ["2025-01"]}, "ndvi_umbral_vegetacion": .3})
+    assert trabajador.celdas_del_perfil(cfg) == [cells[0]]
+
+
+def test_queue_cells_reject_bad_coordinates():
+    from analisis.trabajador import celdas_config
+    for bbox in [[-181, 0, 1, 1], [0, -91, 1, 1], [0, 0, 0, 1], [0.5, 0, 1, 1], [0, 0, 1]]:
+        with pytest.raises(ValueError):
+            celdas_config({"zonas": [{"nombre": "prueba", "bbox": bbox, "prioridad": 1}]})

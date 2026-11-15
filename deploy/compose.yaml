@@ -16,6 +16,8 @@ services:
     env_file: ${API_ENV_FILE:-../secretos/api.env}   # rol tsumi_lectura (solo lectura)
     command: uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
     <<: *logs
 
   trabajador:
@@ -25,8 +27,14 @@ services:
     env_file: ${WORKER_ENV_FILE:-../secretos/.env}   # rol tsumi (escribe teselas)
     volumes:
       - modis:/app/analisis/data/modis
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      GDAL_NUM_THREADS: "1"
     command: python -m analisis.trabajador analisis/inputs/busqueda.json bucle
     restart: unless-stopped
+    mem_limit: 3g
+    cpus: 1.0
     <<: *logs
 
   web:
@@ -39,6 +47,8 @@ services:
     image: tsumi-web
     network_mode: host
     restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.25
     <<: *logs
 
 volumes:

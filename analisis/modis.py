@@ -200,3 +200,11 @@ def muestrear(ctx: dict, lat: float, lon: float) -> dict:
         out[k] = round(v, 4 if k == "ndvi_max" else 2) if np.isfinite(v) else None
         out[conteo] = int(ctx[conteo][fila, col])
     return out
+
+
+def celdas_elegibles(ctx: dict, meses: list[str], umbral: float) -> np.ndarray:
+    """Celdas de 1° con algún píxel que pasa el filtro NDVI; no validación de toda el área."""
+    validos = (ctx["ndvi_n"] == len(meses)) & (ctx["ndvi_max"] <= umbral)
+    filas, cols = validos.shape
+    px = round(1 / PASO)
+    return validos.reshape(filas // px, px, cols // px, px).any(axis=(1, 3))

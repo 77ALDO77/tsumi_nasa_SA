@@ -187,7 +187,10 @@ def test_frontend_contract(monkeypatch):
     assert "no extremos anuales" in res["limitation"]
     assert any("test.hdf" in s["url"] for s in res["sources"])
     assert any("nasa.gov" in s["url"] for s in res["sources"]) and set(res) == {
-        "earthValue", "referenceValue", "unit", "difference", "scale", "limitation", "sources"}
+        "earthValue", "referenceValue", "unit", "difference", "scale", "limitation", "sources", "earthContext"}
+    assert res["earthContext"]["months"] == ["2025-01", "2025-07"]
+    assert res["earthContext"]["passesNdviScreen"] is True
+    assert res["earthContext"]["lstNightMinK"] is None
     assert client.get("/api/analyses/" + done["id"]).json() == done
 
     pending = client.post("/api/analyses", json={"siteId": "TIE-P", "comparisonId": "LUN-C~relieve"}).json()
@@ -353,3 +356,84 @@ def test_worker_stores_context_and_refreshes_cell_candidates(monkeypatch):
         trabajador.referencias(conn, cfg)
         assert conn.execute("""SELECT lat, lon, lado_m, fuente_coordenadas FROM referencias
                                WHERE referencia_id = 'LUN-W'""").fetchone() == (-84, 11, 6000, "coordenadas actualizadas")
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_automatic_batches_are_bounded_and_do_not_reopen_finished_cells():
+    from analisis.cargar import aplicar_migraciones
+    from analisis.trabajador import alimentar_cola, celdas_config
+
+    cfg = {"auto_encolar": {"lote": 100, "minimo_pendientes": 100},
+           "zonas": [{"bbox": [60, -50, 161, -49], "prioridad": 100, "nombre": "prueba lotes"}]}
+    cells = celdas_config(cfg)
+    ids = [c[0] for c in cells]
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM celdas_busqueda WHERE celda_id=ANY(%s)", (ids,))
+        conn.commit()
+        assert alimentar_cola(conn, cfg, cells) == 100
+        assert alimentar_cola(conn, cfg, cells) == 0  # no sobrealimenta mientras hay suficientes pendientes
+        conn.execute("UPDATE celdas_busqueda SET estado='hecha' WHERE celda_id=ANY(%s)", (ids,))
+        conn.commit()
+        assert alimentar_cola(conn, cfg, cells) == 1
+        assert alimentar_cola(conn, cfg, cells) == 0  # dominio agotado, sin duplicar ni reabrir las hechas
+        assert conn.execute("SELECT count(*) FROM celdas_busqueda WHERE celda_id=ANY(%s)", (ids,)).fetchone()[0] == 101
+        assert conn.execute("SELECT count(*) FROM celdas_busqueda WHERE celda_id=ANY(%s) AND estado='hecha'", (ids,)).fetchone()[0] == 100
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_expired_reservations_are_recovered_with_a_retry_ceiling():
+    from analisis.cargar import aplicar_migraciones
+    from analisis.trabajador import tomar
+
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        for cid, lon, intentos in [("S80W170", -170, 1), ("S80W169", -169, 3)]:
+            conn.execute("""INSERT INTO celdas_busqueda (celda_id,lat_min,lon_min,zona,prioridad,estado,intentos,actualizado_utc)
+                            VALUES (%s,-80,%s,'prueba reserva',-1000,'en_curso',%s,now()-interval '2 hours')
+                            ON CONFLICT (celda_id) DO UPDATE SET estado='en_curso',intentos=EXCLUDED.intentos,
+                            actualizado_utc=EXCLUDED.actualizado_utc""", (cid, lon, intentos))
+        conn.commit()
+        row = tomar(conn)
+        assert row[0] == "S80W170" and row[3] == 2
+        assert conn.execute("SELECT estado FROM celdas_busqueda WHERE celda_id='S80W169'").fetchone()[0] == "error"
+        conn.execute("UPDATE celdas_busqueda SET estado='hecha' WHERE celda_id='S80W170'")
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_catalog_metadata_and_live_status_without_recomputing_terrain(monkeypatch):
+    from fastapi.testclient import TestClient
+    from analisis.cargar import aplicar_migraciones
+    from analisis import trabajador
+    from api.main import app
+
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    monkeypatch.setattr(trabajador.socket, "gethostname", lambda: "worker-prueba")
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("""INSERT INTO sitios (sitio_id,cuerpo,lat,lon,fuente_coordenadas)
+                        VALUES ('TIE-CINDER-LAKE','tierra',35.3197,-111.5171,'prueba')
+                        ON CONFLICT (sitio_id) DO UPDATE SET lat=EXCLUDED.lat,lon=EXCLUDED.lon,nombre=NULL,rol=NULL,etiquetas=NULL""")
+        before = conn.execute("SELECT count(*) FROM teselas").fetchone()[0]
+        trabajador.catalogo(conn)
+        trabajador.catalogo(conn)
+        row = conn.execute("SELECT nombre,rol,etiquetas FROM sitios WHERE sitio_id='TIE-CINDER-LAKE'").fetchone()
+        assert row == ("Cinder Lake (Arizona)", "analogo_nasa", ["JETT3-TERRENO-01"])
+        assert conn.execute("SELECT count(*) FROM teselas").fetchone()[0] == before
+        trabajador.latido(conn, "procesando", "S80W170", 100)
+        client = TestClient(app)
+        state = client.get("/api/search/status")
+        assert state.status_code == 200
+        worker = next(w for w in state.json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")
+        assert worker["senal_reciente"] and worker["estado"] == "procesando" and worker["celdas_elegibles"] == 100
+        conn.execute("UPDATE trabajadores SET actualizado_utc=now()-interval '10 minutes' WHERE trabajador_id='worker-prueba'")
+        conn.commit()
+        worker = next(w for w in client.get("/api/search/status").json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")
+        assert worker["senal_reciente"] is False
+        conn.execute("UPDATE sitios SET lat=0 WHERE sitio_id='TIE-CINDER-LAKE'")
+        with pytest.raises(ValueError, match="coordenadas distintas"):
+            trabajador.catalogo(conn)
+        conn.rollback()

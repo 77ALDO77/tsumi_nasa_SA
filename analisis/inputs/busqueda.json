@@ -1,5 +1,5 @@
 {
-  "version": "busqueda-1",
+  "version": "busqueda-2",
   "proposito": "Búsqueda continua de teselas terrestres cuyo relieve cae dentro de la envolvente P10–P90 de una región lunar. Es preselección por relieve, no certificación de analogía.",
   "tesela_m": 3000,
   "escalas_m": [
@@ -8,7 +8,12 @@
   ],
   "fraccion_valida_min": 0.9,
   "minimo_subventanas": 20,
-  "espera_cola_vacia_s": 600,
+  "espera_cola_vacia_s": 60,
+  "auto_encolar": {
+    "lote": 24,
+    "minimo_pendientes": 6,
+    "nota": "Reposición automática y finita. Solo nuevas celdas con algún píxel NDVI válido en todos los meses y máximo <= umbral. No valida la celda completa ni incluye todos los tipos de análogo."
+  },
   "predicciones_registradas_antes_de_calcular": [
     "P1: La tesela que contiene Cinder Lake (USGS GNIS 27656) y la que contiene SP Crater (GNIS 33907) quedan por encima de la mediana de todas las teselas procesadas para al menos una referencia lunar. Fundamento: JETT3 describe 'challenging terrain' análogo al polo sur lunar.",
     "P2: La celda de control N43W103 tiene menor fracción de teselas con 3/3 variables dentro de la envolvente que las celdas de Arizona (N35W112, N35W111).",
@@ -85,6 +90,26 @@
         38
       ],
       "prioridad": 10
+    },
+    {
+      "nombre": "Exploración: Harrat Khaybar y entorno (Arabia Saudí)",
+      "bbox": [37, 23, 43, 29],
+      "prioridad": 20
+    },
+    {
+      "nombre": "Exploración: Tibesti y entorno (Sahara)",
+      "bbox": [15, 18, 23, 25],
+      "prioridad": 30
+    },
+    {
+      "nombre": "Exploración: Namib y entorno",
+      "bbox": [12, -29, 20, -17],
+      "prioridad": 40
+    },
+    {
+      "nombre": "Exploración ampliada: perfil de relieve con NDVI bajo y suficiente",
+      "bbox": [-180, -90, 180, 90],
+      "prioridad": 100
     }
   ],
   "ndvi_umbral_vegetacion": 0.3,

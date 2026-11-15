@@ -89,8 +89,34 @@ la política QA o el umbral; reiniciar todos los trabajadores para no mezclar co
 Si se recalculan referencias, la acción `referencias` las publica junto a su nuevo ranking.
 Los reemplazos del ranking se serializan entre trabajadores, y eliminan candidatos obsoletos.
 
-La migración no recalcula el terreno ni modifica las celdas ya procesadas. La búsqueda ampliada
-de nuevas regiones sigue pendiente; no se debe confundir contexto global MODIS con cobertura global de relieve.
+La migración no recalcula el terreno ni modifica las celdas ya procesadas. No se debe
+confundir contexto global MODIS con cobertura global de relieve.
+
+### Búsqueda por lotes y actividad (migración 005)
+
+El mismo trabajador repone la cola: lotes de 24 si quedan menos de 6 pendientes, sin reabrir
+celdas hechas o con tres fallos. Harrat Khaybar, Tibesti y Namib tienen prioridad antes de
+la exploración ampliada. Se recorre una selección **finita**, condicionada a disponer de
+NDVI bajo y suficiente: la caché actual selecciona 4.145 celdas. No es cobertura completa
+de todos los ambientes terrestres ni actualización automática de la serie MODIS.
+
+Después de `contexto`, ejecutar `catalogo` con el mismo comando del trabajador para completar
+nombres, roles y fuentes de los sitios existentes. `bucle` también lo verifica al arrancar.
+No ejecutar una carga masiva de todas las coordenadas para mantener ocupada la cola.
+
+`GET /api/search/status` muestra estado, cola, candidatos y señales del trabajador. El atlas
+consulta cada 30 s; el trabajador avisa antes de procesar y cada 60 s cuando espera.
+Una señal de más de cinco minutos se muestra como antigua, **no** como prueba de que murió
+(una lectura HTTP puede seguir en curso). Las reservas de más de una hora se recuperan
+respetando el máximo de tres intentos. Los errores definitivos requieren revisión.
+
+Límites iniciales de los contenedores: trabajador 1 CPU/3 GiB, API 0,5 CPU/512 MiB y web
+0,25 CPU/128 MiB. Un solo trabajador al principio; medir el pico con MODIS antes de escalar.
+OpenBLAS, OpenMP y GDAL se limitan a un hilo en el trabajador.
+
+Actualizar primero la imagen Python y preparar `contexto`/`catalogo`, luego arrancar API y
+trabajador, y por último recrear web. Conservar una copia privada de la base y las imágenes
+anteriores para poder volver atrás. El nginx del host y los otros sitios no necesitan cambios.
 
 ## Qué significa el contexto NASA
 
@@ -132,6 +158,7 @@ sudo -u postgres psql -d tsumi -c "SELECT pg_size_pretty(pg_total_relation_size(
 | `celda_tomada` / `celda_terminada` | trabajador | `celda`, `n_validas`, `lectura_s`, `metricas_s`, `insercion_s`, `duracion_s` |
 | `fuente_leida` | trabajador | `url`, `estado`, `apertura_s`, `lectura_s` |
 | `contexto_preparado` / `contexto_rellenado` | trabajador | Identidad y fuentes con SHA-256 / teselas muestreadas y candidatos |
+| `lote_encolado` / `catalogo_actualizado` | trabajador | Nuevas celdas del lote, pendientes previas y dominio elegible / metadatos de sitios revisados |
 | `celda_fallida` | trabajador | `celda`, `intentos`, `error`, `excepcion`. Tras 3 intentos queda en `error` |
 | `celdas_recuperadas` / `cola_vacia` / `trabajador_detenido` | trabajador | Celdas de un trabajador caído devueltas a la cola / espera / excepción que lo detuvo |
 | `peticion` / `peticion_fallida` / `base_no_disponible` | api | `metodo`, `ruta`, `estado`, `duracion_ms` |

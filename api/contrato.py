@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from api.main import DESCARGO, LIMITES, SQL_DISTANCIAS, VERSION_POR_DEFECTO, cifra, conectar
+from api.main import DESCARGO, LIMITES, SQL_DISTANCIAS, VERSION_POR_DEFECTO, cifra, conectar, estado_busqueda
 
 router = APIRouter()
 RES_M = 60.0
@@ -54,6 +54,12 @@ def referencias(conn):
     return conn.execute("""SELECT referencia_id, coalesce(nombre, referencia_id) AS nombre, cuerpo FROM referencias
                            WHERE res_m = %s AND version_metodo = %s ORDER BY referencia_id""",
                         (RES_M, VERSION_POR_DEFECTO)).fetchall()
+
+
+@router.get("/search/status")
+def search_status():
+    """Actividad medida en la base; nunca infiere salud por tener un contenedor encendido."""
+    return estado_busqueda()
 
 
 @router.get("/sites")
@@ -101,6 +107,19 @@ def contexto_nasa(tile, activo):
              "El relieve puede orientar ensayos de movilidad y navegación; requiere inspección de campo.")
     fuentes = [{"title": f"NASA {f['producto']} 061 · {f['mes']}", "url": f["url"]} for f in meta["fuentes"]]
     return texto, fuentes
+
+
+def valores_contexto(tile, activo):
+    if activo is None or tile["contexto_id"] != activo["contexto_id"]:
+        return None
+    return {"months": activo["metadata"]["meses"], "resolutionDegrees": 0.05,
+            "ndviMax": tile["ndvi_max"], "ndviValidMonths": tile["ndvi_n"],
+            "lstDayMaxK": tile["lst_dia_max_k"], "lstDayValidMonths": tile["lst_dia_n"],
+            "lstNightMinK": tile["lst_noche_min_k"], "lstNightValidMonths": tile["lst_noche_n"],
+            "ndviThreshold": activo["umbral_ndvi"],
+            "passesNdviScreen": (tile["ndvi_max"] is not None
+                                and tile["ndvi_n"] == len(activo["metadata"]["meses"])
+                                and tile["ndvi_max"] <= activo["umbral_ndvi"])}
 
 
 def tesela_de(site_id: str):
@@ -163,6 +182,8 @@ def analizar(site_id: str, comparison_id: str) -> dict:
     dentro = tile["d_" + col] == 0
     fuentes = [etiquetas()[e] for e in (sitio or {}).get("etiquetas") or [] if e in etiquetas()]
     contexto, fuentes_modis = contexto_nasa(tile, activo)
+    coordenada = (f"Coordenada terrestre: {sitio['fuente_coordenadas']}. "
+                  "La documentación del entorno no valida por sí sola esta tesela. ") if sitio else ""
     return {"id": ident, "status": "completed", "result": {
         "earthValue": round(earth, 2), "referenceValue": round(mid, 2), "unit": unidad,
         "difference": round(earth - mid, 2),
@@ -170,9 +191,9 @@ def analizar(site_id: str, comparison_id: str) -> dict:
                   f"{ref['n_subventanas']} subventanas de 3 km de {ref['nombre'] or ref_id} (LRO LOLA)."),
         "limitation": (f"{nombre}: la referencia va de {cifra(env['p10'], unidad)} a {cifra(env['p90'], unidad)} "
                        f"(P10–P90) y este sitio queda {'dentro' if dentro else 'fuera'}. En las 3 variables de relieve, "
-                        f"{tile['n_dentro']}/3 dentro de la envolvente. " + contexto + " "
+                         f"{tile['n_dentro']}/3 dentro de la envolvente. " + coordenada + contexto + " "
                         + " ".join(LIMITES[ref["cuerpo"]]) + " " + DESCARGO),
-        "sources": fuentes + FUENTES_DATOS + fuentes_modis}}
+        "sources": fuentes + FUENTES_DATOS + fuentes_modis, "earthContext": valores_contexto(tile, activo)}}
 
 
 @router.post("/analyses")

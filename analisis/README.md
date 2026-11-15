@@ -14,7 +14,7 @@ Cada ventana se lee por HTTP con lecturas parciales (GDAL `/vsicurl/`), sin desc
 
 ```bash
 uv pip install -r analisis/requirements.txt        # numpy, rasterio/GDAL, psycopg, httpx, pyhdf/HDF4
-python -m pytest -q analisis/tests                 # 21 pruebas sin red
+python -m pytest -q analisis/tests                 # 24 pruebas sin red
 python -m analisis analisis/inputs/mvp0.json --salida analisis/data/<carpeta-nueva> [--solo LUN-SHACKLETON]
 ```
 
@@ -54,6 +54,13 @@ Estas cifras son una inspección de datos, no una prueba de coherencia con NASA.
 Cómo funciona:
 - **Referencia.** Cada región lunar de 15 km se divide en 25 subventanas de 3 km, y su rango P10–P90 por variable forma la envolvente.
 - **Cola.** El trabajador toma celdas de 1° de la cola `celdas_busqueda`, por prioridad, y lee el relieve una sola vez.
+- **Reposición.** Con `auto_encolar` repone lotes de 24 cuando hay menos de 6 pendientes.
+  Prioriza las zonas explícitas y luego recorre la malla terrestre de 1°. Solo añade celdas
+  con algún píxel MODIS que tenga NDVI ≤0,3 válido en ambos meses. No valida toda el área;
+  excluye muchos ambientes vegetados, con nieve o con datos insuficientes. La acción `encolar`
+  también respeta el lote y este filtro cuando está habilitado el modo automático.
+- **Actividad.** Cada reserva y cada espera actualiza `trabajadores`. Una reserva de más de
+  una hora se recupera durante el bucle, respetando un máximo de tres intentos.
 - **Teselas.** Divide cada celda en teselas de 3 km a 60 y 120 m y guarda sus métricas en `teselas`.
 - **Comparación.** Se hace en SQL al consultar la API (`/analogos`, `/coherencia`).
 - **Contexto NASA.** La acción `contexto` prepara MOD13C2 (NDVI) y MOD11C3 (LST)
@@ -63,6 +70,8 @@ Cómo funciona:
   referencia o contexto. `/api/sites` lee su índice, hasta 30 candidatos por referencia.
   Exige 3/3 dentro y NDVI máximo ≤0,3 con dato válido en todos los meses seleccionados.
   Es un filtro exploratorio, no un umbral NASA ni prueba de ausencia de vegetación.
+- **Nombres y fuentes.** La acción `catalogo` completa los sitios existentes desde
+  `inputs/mvp0.json`, verificando sus coordenadas y sin recalcular métricas.
 - **Variables que puntúan.** Pendiente mediana, pendiente P90 y relieve. La rugosidad no puntúa porque está correlacionada con el relieve.
 
 La configuración y las predicciones registradas antes del cálculo están en `inputs/busqueda.json`. El despliegue y los logs, en [deploy/README.md](../deploy/README.md).
@@ -71,6 +80,10 @@ La política MODIS, limitaciones y actualización segura están en
 [deploy/README.md](../deploy/README.md#qué-significa-el-contexto-nasa).
 Enero/julio de 2025 no constituyen una climatología ni extremos anuales; su píxel de
 0,05° es contexto del centro de la tesela, no detalle de 3 km. No se puntúa analogía térmica.
+
+La selección calculada con la caché QA actual contiene 4.145 celdas, incluidas las 27 iniciales.
+Es un dominio finito: cuando todas están recorridas, el trabajador espera y el estado lo indica.
+No se actualizan automáticamente los meses de MODIS ni se prometen descubrimientos infinitos.
 
 Primera ejecución local, 2026-11-15, con las celdas N35W111, N35W112 y N43W103:
 - **Tasa base:** de 0 % a 2,1 % de teselas con 3/3.
