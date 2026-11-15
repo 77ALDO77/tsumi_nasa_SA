@@ -5,11 +5,11 @@ Reto: «Identify Earth Locations that Analog the Permanent Moon Base Locations a
 - Hay tres paquetes implementados:
   - `scrapping/`: extractor documental.
   - `analisis/`: métricas de relieve por ventana, de la Luna (LOLA polar) y de la Tierra (GLO-30), leídas por HTTP con GDAL. Se ejecuta con `python -m analisis analisis/inputs/mvp0.json --salida analisis/data/<nueva>`; tiene 9 pruebas sin red. Las cifras que produce son de inspección, no de validación.
-  - `analisis.trabajador`: búsqueda continua por celdas de 1° (cola en `celdas_busqueda`, resultados en `teselas`), pensada para correr como servicio de systemd (`deploy/`). Logs en JSON por stdout (`analisis/registro.py`); nunca registres credenciales.
+  - `analisis.trabajador`: búsqueda continua por celdas de 1° (cola en `celdas_busqueda`, resultados en `teselas`), se despliega con Docker Compose (`deploy/`, ver `deploy/README.md`). Logs en JSON por stdout (`analisis/registro.py`); nunca registres credenciales.
   - `api/`: FastAPI de solo lectura sobre la base (`uvicorn api.main:app`). Ver `api/README.md`. Su prueba con base de datos necesita `TEST_DATABASE_URL`, que debe apuntar a un PostgreSQL+PostGIS desechable, nunca al servidor.
 - Esquema: `db/migraciones/*.sql`, que aplica `analisis.cargar` y son idempotentes. La base real es PostgreSQL 17 + PostGIS 3.5 en el servidor del equipo; se accede por túnel SSH y `DATABASE_URL` vive en `secretos/.env`.
 - `docs/TEMPERATURA_EARTH2STUDIO.md` y `docs/VARIABLES_PROTOTIPO.md` son diseños. No hay Earth2Studio ni frontend. No los des por existentes.
-- PostgreSQL, el backend y el frontend irán en un servidor Debian del equipo. No te conectes a él sin confirmación.
+- Despliegue: servidor Debian del equipo, en `/home/aldo/nasa/` junto a `nasa-azzu-front` (atlas, en `/atlas/`) y `nasa-azzu-landing` (en `/`), detrás del nginx del host en `nasa.azzu.tech`. Ese nginx es compartido con otros sitios: cambia solo `nasa.azzu.tech` y ejecuta `nginx -t` antes de recargar. No te conectes al servidor sin confirmación.
 - El paquete se llama `scrapping` (con doble p, a propósito). Ejecuta todo desde la raíz: `python -m scrapping …`. `python -m nasa_scraper` ya no funciona.
 - Los READMEs usan rutas de Windows (`.\.venv\Scripts\python.exe`) porque el equipo trabaja en Windows. En Linux, si falta `.venv`, créalo con `uv venv .venv --python 3.13 && uv pip install -r scrapping/requirements-dev.txt`. El lock se probó en Windows con Python 3.13, y el `python3` del sistema es 3.14.
 - Pruebas (30, sin red): `python -m pytest -q scrapping/tests`. Para una sola: `-k <nombre>`. `scrapping/pytest.ini` pone `pythonpath = ..`, así que no ejecutes pytest desde dentro de `scrapping/` con otra configuración.

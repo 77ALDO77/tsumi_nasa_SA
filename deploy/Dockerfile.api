@@ -1,0 +1,17 @@
+# Imagen Python (uv) para la API y el trabajador. Contexto: la raíz del repo (ver compose.yaml).
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+WORKDIR /app
+# La rueda de rasterio (GDAL) necesita libexpat; ca-certificates para que GDAL valide TLS al leer por HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends libexpat1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY analisis/requirements.txt analisis/requirements.txt
+COPY api/requirements.txt api/requirements.txt
+RUN uv pip install --system --no-cache -r analisis/requirements.txt -r api/requirements.txt
+COPY analisis/ analisis/
+COPY api/ api/
+COPY db/ db/
+# La API lee las fuentes NASA de las etiquetas para «Fuentes y límites».
+COPY scrapping/docs/etiquetas_analogos.json scrapping/docs/etiquetas_analogos.json
+RUN useradd --system --no-create-home tsumi
+USER tsumi
+ENV PYTHONUNBUFFERED=1

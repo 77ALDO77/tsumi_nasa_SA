@@ -1,0 +1,40 @@
+# Despliegue en /home/aldo/nasa: este repo junto a nasa-azzu-front y nasa-azzu-landing.
+#   cd tsumi_nasa_SA/deploy && docker compose up -d --build
+# Red del host en todos los servicios: PostgreSQL del host en 127.0.0.1:5432 y nada expuesto fuera de localhost.
+name: tsumi
+
+x-logs: &logs
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}   # servidor compartido: los logs no llenan el disco
+
+services:
+  api:
+    build: {context: .., dockerfile: deploy/Dockerfile.api}
+    image: tsumi-py
+    network_mode: host
+    env_file: ${API_ENV_FILE:-../secretos/api.env}   # rol tsumi_lectura (solo lectura)
+    command: uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
+    restart: unless-stopped
+    <<: *logs
+
+  trabajador:
+    image: tsumi-py
+    depends_on: [api]   # asegura que la imagen se construya antes
+    network_mode: host
+    env_file: ${WORKER_ENV_FILE:-../secretos/.env}   # rol tsumi (escribe teselas)
+    command: python -m analisis.trabajador analisis/inputs/busqueda.json bucle
+    restart: unless-stopped
+    <<: *logs
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      additional_contexts:
+        atlas_src: ../../nasa-azzu-front
+        landing_src: ../../nasa-azzu-landing
+    image: tsumi-web
+    network_mode: host
+    restart: unless-stopped
+    <<: *logs

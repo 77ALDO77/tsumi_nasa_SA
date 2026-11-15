@@ -1,34 +1,73 @@
-# Despliegue en el servidor Debian
+# Despliegue en el servidor (Docker + nginx del host)
 
-Requisitos previos (ya hechos): PostgreSQL 17 + PostGIS 3.5, base y rol `tsumi`, acceso solo por `127.0.0.1`.
-
-```bash
-# En el servidor, como aldo (las rutas de los .service asumen /home/aldo/tsumi_nasa_SA)
-git clone <repo> ~/tsumi_nasa_SA && cd ~/tsumi_nasa_SA
-python3 -m venv .venv && .venv/bin/pip install -r analisis/requirements.txt -r api/requirements.txt
-mkdir -p secretos && chmod 700 secretos
-echo 'DATABASE_URL=postgresql://tsumi:<clave>@127.0.0.1:5432/tsumi' > secretos/.env && chmod 600 secretos/.env
-
-# Rol de solo lectura para la API (expuesta a internet): pide la clave y no la deja en el historial
-sudo -u postgres createuser --pwprompt tsumi_lectura
-sudo -u postgres psql -d tsumi -c "GRANT CONNECT ON DATABASE tsumi TO tsumi_lectura; GRANT USAGE ON SCHEMA public TO tsumi_lectura; GRANT SELECT ON ALL TABLES IN SCHEMA public TO tsumi_lectura; ALTER DEFAULT PRIVILEGES FOR ROLE tsumi IN SCHEMA public GRANT SELECT ON TABLES TO tsumi_lectura;"
-echo 'DATABASE_URL=postgresql://tsumi_lectura:<clave>@127.0.0.1:5432/tsumi' > secretos/api.env && chmod 600 secretos/api.env
-
-export $(cat secretos/.env)   # una vez, para preparar la búsqueda (rol tsumi, que escribe)
-.venv/bin/python -m analisis.trabajador analisis/inputs/busqueda.json referencias
-.venv/bin/python -m analisis.trabajador analisis/inputs/busqueda.json encolar
-
-sudo cp deploy/tsumi-*.service /etc/systemd/system/ && sudo systemctl daemon-reload
-sudo systemctl enable --now tsumi-trabajador tsumi-api
+```
+Internet ──443──► nginx del host (TLS, sitio nasa.azzu.tech; convive con azzu.tech y keycloak)
+                     └─► 127.0.0.1:8080  contenedor web (nginx): /  landing · /atlas/  TSUMI Atlas · /api/ → api
+                    contenedor api (uv, uvicorn 127.0.0.1:8000, rol de solo lectura)
+                    contenedor trabajador (uv, búsqueda continua) ──► PostgreSQL 17 + PostGIS del host (127.0.0.1:5432)
 ```
 
-Seguimiento (logs JSON, una línea por evento):
+Los tres contenedores usan la red del host y solo escuchan en `127.0.0.1`. Desde internet solo se ve `nasa.azzu.tech`, a través del nginx del host. PostgreSQL y `pg_hba.conf` no cambian. Las imágenes se construyen con **bun** (landing y atlas) y con **uv** (Python), y nunca incluyen `secretos/` (ver `.dockerignore`).
+
+## Estructura en el servidor
+
+```
+/home/aldo/nasa/
+├── tsumi_nasa_SA/        (este repo: deploy/compose.yaml, secretos/)
+├── nasa-azzu-front/      (atlas; se compila con --base /atlas/ y VITE_API_BASE_URL=/api, sin tocar el repo)
+└── nasa-azzu-landing/    (landing)
+```
+
+Las carpetas tienen que llamarse exactamente así: `compose.yaml` las encuentra por ruta relativa.
+
+## Primera vez
 
 ```bash
-journalctl -u tsumi-trabajador -f -o cat | jq -c '{ts, evento, celda, estado, duracion_s}'
-journalctl -u tsumi-trabajador -o cat | jq 'select(.nivel == "error")'
-journalctl -u tsumi-api -f -o cat | jq -c 'select(.evento == "peticion") | {ruta, estado, duracion_ms}'
-curl -s 127.0.0.1:8000/busqueda/estado | jq      # avance de la cola
+cd /home/aldo/nasa/tsumi_nasa_SA
+mkdir -p secretos && chmod 700 secretos
+# Rol de escritura (trabajador). Formato NOMBRE=valor, una línea.
+echo 'DATABASE_URL=postgresql://tsumi:<clave>@127.0.0.1:5432/tsumi' > secretos/.env
+# Rol de solo lectura (API expuesta a internet).
+sudo -u postgres createuser --pwprompt tsumi_lectura
+sudo -u postgres psql -d tsumi -c "GRANT CONNECT ON DATABASE tsumi TO tsumi_lectura; GRANT USAGE ON SCHEMA public TO tsumi_lectura; GRANT SELECT ON ALL TABLES IN SCHEMA public TO tsumi_lectura; ALTER DEFAULT PRIVILEGES FOR ROLE tsumi IN SCHEMA public GRANT SELECT ON TABLES TO tsumi_lectura;"
+echo 'DATABASE_URL=postgresql://tsumi_lectura:<clave>@127.0.0.1:5432/tsumi' > secretos/api.env
+chmod 600 secretos/*.env
+
+cd deploy
+docker compose build
+R="docker compose run --rm -T trabajador python -m analisis.trabajador analisis/inputs/busqueda.json"
+$R referencias      # envolventes lunares (P10, P50, P90); aplica las migraciones
+$R encolar          # celdas de las zonas de analisis/inputs/busqueda.json
+docker compose up -d
+```
+
+Opcional: para que el catálogo muestre los nombres de los sitios NASA, carga el manifiesto de inspección (`python -m analisis.cargar analisis/data/<carpeta>`, con el rol `tsumi`).
+
+## nginx del host y HTTPS (requiere el registro DNS A `nasa` → `2.25.252.196` en Hostinger)
+
+```bash
+dig +short nasa.azzu.tech                     # debe responder 2.25.252.196
+sudo cp deploy/nginx-host.conf /etc/nginx/sites-available/nasa.azzu.tech
+sudo ln -s ../sites-available/nasa.azzu.tech /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx  # nginx -t primero: el nginx es compartido
+sudo certbot --nginx -d nasa.azzu.tech        # añade 443 y la redirección 80 → 443
+```
+
+## Actualizar
+
+```bash
+cd /home/aldo/nasa/<repo que cambió> && git pull
+cd /home/aldo/nasa/tsumi_nasa_SA/deploy && docker compose up -d --build
+```
+
+## Seguimiento (logs JSON, una línea por evento, con rotación de 5 × 10 MB por contenedor)
+
+```bash
+docker compose logs -f --no-log-prefix trabajador | jq -c '{ts, evento, celda, estado, duracion_s}'
+docker compose logs --no-log-prefix trabajador | jq 'select(.nivel == "error")'
+docker compose logs --no-log-prefix trabajador | jq -c 'select(.evento == "fuente_leida" and .lectura_s > 60)'   # tramos lentos
+docker compose logs -f --no-log-prefix api | jq -c 'select(.evento == "peticion") | {ruta, estado, duracion_ms}'
+curl -s 127.0.0.1:8000/busqueda/estado | jq    # avance de la cola (ruta interna, no se publica)
 ```
 
 | Evento | Servicio | Campos clave |
@@ -36,28 +75,16 @@ curl -s 127.0.0.1:8000/busqueda/estado | jq      # avance de la cola
 | `inicio` | trabajador | `accion`, `config_sha256`, `version_metodo` |
 | `celda_tomada` / `celda_terminada` | trabajador | `celda`, `n_validas`, `lectura_s`, `metricas_s`, `insercion_s`, `duracion_s` |
 | `fuente_leida` | trabajador | `url`, `estado`, `apertura_s`, `lectura_s` |
-| `celda_fallida` | trabajador | `celda`, `intentos`, `error`, `excepcion`. Tras 3 intentos la celda queda en `error` |
-| `celdas_recuperadas` | trabajador | Celdas `en_curso` de un trabajador caído, devueltas a la cola |
-| `cola_vacia` / `trabajador_detenido` | trabajador | Espera entre revisiones de la cola / excepción que detuvo el proceso |
+| `celda_fallida` | trabajador | `celda`, `intentos`, `error`, `excepcion`. Tras 3 intentos queda en `error` |
+| `celdas_recuperadas` / `cola_vacia` / `trabajador_detenido` | trabajador | Celdas de un trabajador caído devueltas a la cola / espera / excepción que lo detuvo |
 | `peticion` / `peticion_fallida` / `base_no_disponible` | api | `metodo`, `ruta`, `estado`, `duracion_ms` |
 
-Para añadir zonas de búsqueda, edita `zonas` en `analisis/inputs/busqueda.json` y vuelve a ejecutar `encolar`. El trabajador las toma por prioridad sin reiniciarse. Los logs nunca incluyen `DATABASE_URL`.
+Los logs nunca incluyen `DATABASE_URL`.
 
-## Capacidad del servidor
+## Rendimiento y red
 
-El servidor tiene 2 vCPU, 7,7 GB de RAM y unos 91 GB libres, y lo comparte con otro proyecto.
+Por celda, el trabajador tarda de 45 a 85 s, casi todo lectura de red, con unos 5 s de CPU y unos 300 MB de RAM en el pico.
 
-- **Por celda**, el trabajador espera la red unos 60–85 s, usa unos 5 s de CPU y unos 300 MB de RAM en el pico.
-- **Para ir más rápido** se puede lanzar un segundo trabajador, porque la cola reparte las celdas con `SKIP LOCKED`.
-- **Almacenamiento:** cada celda ocupa del orden de 1 MB en `teselas` (dos escalas, sin píxeles). Es una estimación sin medir.
-- **Cortes de red:** una conexión estancada corta en unos 30 s y la celda vuelve a la cola, con un máximo de 3 intentos. Se ve como `celda_fallida` en los logs.
+**Lentitud intermitente.** Algunas ejecuciones tardaron de 9 a 10 min, porque un tramo HTTP hacia el bucket de Copernicus iba muy lento. GDAL corta las conexiones estancadas (15 s para conectar, o menos de 10 KB/s durante 30 s) y reintenta 3 veces. Sus reintentos solo aparecen a nivel DEBUG, así que los tramos lentos se buscan con `fuente_leida`. Un error que no sea 404 hace fallar la celda, que vuelve a la cola: nunca se guarda un hueco como si fuera océano.
 
-## Publicar la API para nasa.azzu.tech (pendiente del dominio)
-
-El frontend (repo `nasa-azzu-front`) se publica en `https://nasa.azzu.tech` y llama a la API desde el navegador. Por eso la API necesita un nombre público con HTTPS: una página HTTPS no puede llamar a una API por HTTP.
-
-1. **DNS:** un registro, por ejemplo `api.nasa.azzu.tech`, que apunte a este servidor.
-2. **Proxy con TLS** en el puerto 443, que reenvíe a `127.0.0.1:8000`, por ejemplo Caddy. Antes, revisar qué usa ya los puertos 80 y 443, porque el servidor es compartido: `sudo ss -ltnp | grep -E ':(80|443)\b'`.
-3. **Frontend:** al compilarlo, `VITE_API_BASE_URL=https://api.nasa.azzu.tech/api`.
-
-La API ya cumple el contrato del frontend en `/api` (ver `api/README.md`) y limita CORS a `https://nasa.azzu.tech` (`deploy/tsumi-api.service`). PostgreSQL sigue cerrado: solo escucha en `127.0.0.1`.
+Para ir más rápido, se puede lanzar un segundo trabajador con `docker compose up -d --scale trabajador=2`, porque la cola reparte las celdas con `SKIP LOCKED`.

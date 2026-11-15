@@ -1,0 +1,20 @@
+# Landing (/) y TSUMI Atlas (/atlas/) compilados con bun y servidos por nginx.
+# Los repos hermanos llegan como contextos con nombre (compose.yaml): no se les añade ningún archivo.
+
+FROM oven/bun:1 AS landing
+WORKDIR /src
+COPY --from=landing_src . .
+# shortcut: sin bun.lock en el repo, bun instala migrando package-lock.json; si suben bun.lock, usar --frozen-lockfile.
+RUN rm -rf node_modules dist && bun install && bunx vite build
+
+FROM oven/bun:1 AS atlas
+WORKDIR /src
+COPY --from=atlas_src . .
+# Mismo origen que la API: el navegador llama a /api sin CORS.
+ENV VITE_API_BASE_URL=/api
+RUN rm -rf node_modules dist && bun install && bunx tsc --noEmit && bunx vite build --base /atlas/
+
+FROM nginx:1.27-alpine
+COPY --from=landing /src/dist /usr/share/nginx/html
+COPY --from=atlas /src/dist /usr/share/nginx/html/atlas
+COPY deploy/nginx-web.conf /etc/nginx/conf.d/default.conf

@@ -1,0 +1,10 @@
+# Nunca dentro de una imagen: credenciales, entornos locales ni datos de ejecuciones.
+secretos/
+.env
+.venv/
+.git/
+**/__pycache__/
+**/.pytest_cache/
+analisis/data/
+scrapping/data/
+scrapping/certs/
