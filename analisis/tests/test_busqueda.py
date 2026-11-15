@@ -22,7 +22,7 @@ def test_envelope_is_p10_p90_and_requires_enough_windows():
     tiles = [{"estado": "calculado", "pendiente_mediana_grados": i, "pendiente_p90_grados": 2 * i,
               "relieve_p95_p5_m": 10 * i} for i in range(1, 21)]
     env, n = envolvente(tiles, 20)
-    assert n == 20 and env["pendiente_mediana_grados"] == {"p10": 2.9, "p90": 18.1}
+    assert n == 20 and env["pendiente_mediana_grados"] == {"p10": 2.9, "p50": 10.5, "p90": 18.1}
     with pytest.raises(ValueError):
         envolvente(tiles[:5], 20)
 

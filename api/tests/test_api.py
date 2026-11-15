@@ -114,3 +114,63 @@ def test_search_endpoints_rank_by_envelope(monkeypatch):
     assert coh[0]["sitio_id"] == "TIE-T" and coh[0]["n_dentro"] == 3 and abs(coh[0]["percentil"] - 2 / 3) < 1e-9
     assert client.get("/busqueda/estado").json()["celdas"]["hecha"] >= 1
     assert client.get("/analogos/NO-EXISTE").status_code == 404
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere TEST_DATABASE_URL (PostgreSQL + PostGIS desechable)")
+def test_frontend_contract(monkeypatch):
+    from fastapi.testclient import TestClient
+    from psycopg.types.json import Jsonb
+
+    from analisis.cargar import aplicar_migraciones
+    from api.main import VERSION_POR_DEFECTO, app
+
+    env = {"pendiente_mediana_grados": {"p10": 4, "p50": 6, "p90": 8},
+           "pendiente_p90_grados": {"p10": 10, "p50": 13, "p90": 16},
+           "relieve_p95_p5_m": {"p10": 100, "p50": 200, "p90": 300}}
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM teselas WHERE celda_id = 'N30E030'")
+        conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
+                        fuente_coordenadas, n_subventanas, envolvente, nombre)
+                        VALUES ('LUN-C','luna',-85,10,15000,3000,60,%s,'p',25,%s,'Región C') ON CONFLICT DO NOTHING""",
+                     (VERSION_POR_DEFECTO, Jsonb(env)))
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, estado) VALUES
+                        ('N30E030',30,30,'prueba','hecha'), ('N31E031',31,31,'prueba','pendiente') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO teselas VALUES ('N30E030',60,%s,0,0,30.05,30.05,
+                        ST_GeomFromText('POLYGON((30 30,30.1 30,30.1 30.1,30 30.1,30 30))',4326),7,12,250,40,1)""",
+                     (VERSION_POR_DEFECTO,))
+        for sid, lat, rol, tags in (("TIE-C", 30.05, "analogo_nasa", ["JETT3-TERRENO-01"]),
+                                    ("TIE-P", 31.5, "analogo_nasa_marte", None)):
+            conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, nombre, rol, etiquetas)
+                            VALUES (%s,'tierra',%s,%s,'prueba',ST_SetSRID(ST_MakePoint(%s,%s),4326),%s,%s,%s)
+                            ON CONFLICT DO NOTHING""", (sid, lat, lat, lat, lat, "Sitio " + sid, rol, tags))
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    client = TestClient(app)
+
+    sites = {s["id"]: s for s in client.get("/api/sites").json()}
+    assert sites["TIE-C"] == {"id": "TIE-C", "name": "Sitio TIE-C", "lat": 30.05, "lon": 30.05,
+                              "coverage": "Análogo NASA documentado"}
+    candidate = sites["T~N30E030~0~0"]
+    assert candidate["coverage"] == "Candidato detectado · 3/3 frente a Región C" and set(candidate) == {"id", "name", "lat", "lon", "coverage"}
+
+    comps = client.get("/api/sites/TIE-C/comparisons").json()
+    comp = next(c for c in comps if c["id"] == "LUN-C~relieve")
+    assert comp == {"id": "LUN-C~relieve", "label": "Región C · Relieve P95–P5", "variable": "Relieve P95–P5",
+                    "reference": "Luna · Región C"}
+
+    done = client.post("/api/analyses", json={"siteId": "TIE-C", "comparisonId": "LUN-C~relieve"}).json()
+    assert done["status"] == "completed" and done["id"] == "TIE-C|LUN-C~relieve"
+    res = done["result"]
+    assert (res["earthValue"], res["referenceValue"], res["difference"], res["unit"]) == (250, 200, 50, "m")
+    assert "3/3 dentro" in res["limitation"] and "dentro" in res["limitation"]
+    assert any("nasa.gov" in s["url"] for s in res["sources"]) and set(res) == {
+        "earthValue", "referenceValue", "unit", "difference", "scale", "limitation", "sources"}
+    assert client.get("/api/analyses/" + done["id"]).json() == done
+
+    pending = client.post("/api/analyses", json={"siteId": "TIE-P", "comparisonId": "LUN-C~relieve"}).json()
+    assert pending["status"] == "insufficient_data" and "N31E031: pendiente" in pending["message"]
+
+    assert client.post("/api/analyses", json={"siteId": "T~N30E030~0~0", "comparisonId": "LUN-C~pendiente_p90"}).json()["result"]["earthValue"] == 12
+    assert client.get("/api/sites/NO-EXISTE/comparisons").status_code == 404
+    assert client.post("/api/analyses", json={"siteId": "TIE-C", "comparisonId": "LUN-C~otra"}).status_code == 404

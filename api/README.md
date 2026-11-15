@@ -32,3 +32,20 @@ Reglas de la API:
 - **No calcula puntuaciones ni porcentajes de analogía.** Ordena por cuántas variables caen dentro de la envolvente y por su distancia en anchos de envolvente, y siempre informa la tasa base.
 - **La descripción no lleva texto libre.** Se arma únicamente con los valores calculados.
 - **Las ventanas sin dato aparecen como `sin_dato`, nunca como cero.**
+
+## Contrato del frontend TSUMI Atlas (`/api`, `api/contrato.py`)
+
+Cumple el contrato de `ANALISIS-FRONTEND.md` del repo `nasa-azzu-front` sin modificar el frontend. Se comprobó de punta a punta con Playwright: catálogo → sitio → comparación → Analizar → «Fuentes y límites».
+
+| Ruta | Respuesta |
+|---|---|
+| `GET /api/sites` | `[{id, name, lat, lon, coverage}]`: los sitios terrestres registrados y los 30 mejores candidatos (3/3) por referencia. El id de un candidato es `T~<celda>~<ix>~<iy>` |
+| `GET /api/sites/{id}/comparisons` | `[{id, label, variable, reference}]`: una por referencia y variable. El id es `<referencia>~<variable>` |
+| `POST /api/analyses` `{siteId, comparisonId}` | `{id, status, result?, message?}`. Responde al momento: las métricas ya están calculadas, así que nunca queda `pending`. Si la celda del sitio aún no se procesó, devuelve `insufficient_data` con el estado de la celda |
+| `GET /api/analyses/{siteId}\|{comparisonId}` | Lo mismo |
+
+En `result`:
+- `earthValue` es la tesela de 3 km a 60 m;
+- `referenceValue` es la **mediana** de la envolvente de 3 km de la región lunar, siempre a la misma escala;
+- `limitation` incluye el rango P10–P90, el resumen k/3, las rupturas y el descargo;
+- `sources` incluye el artículo NASA de la etiqueta del sitio, LOLA y Copernicus.

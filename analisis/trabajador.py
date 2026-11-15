@@ -41,11 +41,11 @@ def referencias(conn, cfg):
         for res, z in grids.items():
             env, n = envolvente(metricas_teselas(z, res, round(tesela_m / res), minimo), cfg["minimo_subventanas"])
             conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
-                            fuente_coordenadas, n_subventanas, envolvente) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                            fuente_coordenadas, n_subventanas, envolvente, nombre) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                             ON CONFLICT (referencia_id, res_m, version_metodo) DO UPDATE SET envolvente = EXCLUDED.envolvente,
-                            n_subventanas = EXCLUDED.n_subventanas, calculado_utc = now()""",
+                            n_subventanas = EXCLUDED.n_subventanas, nombre = EXCLUDED.nombre, calculado_utc = now()""",
                          (ref["id"], ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], tesela_m, res, VERSION_METODO,
-                          ref["fuente_coordenadas"], n, Jsonb(env)))
+                          ref["fuente_coordenadas"], n, Jsonb(env), ref.get("nombre")))
             conn.commit()
             evento(log, "referencia_calculada", referencia=ref["id"], res_m=res, n_subventanas=n, envolvente=env)
 

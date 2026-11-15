@@ -2,7 +2,10 @@
   "version": "mvp0-2",
   "proposito": "Inspección de datos: comprobar lectura, unidades, orientación y escala antes de fijar el preregistro. No es una prueba de coherencia con NASA.",
   "lado_m": 15000,
-  "escalas_m": [60, 120],
+  "escalas_m": [
+    60,
+    120
+  ],
   "fraccion_valida_min": 0.9,
   "limites": [
     "LOLA con máscara ldec: los píxeles sin disparos láser se excluyen antes de promediar; la fracción medida queda en la procedencia.",
@@ -11,21 +14,96 @@
     "La pendiente depende de la escala: se informan 60 y 120 m; ninguna se elige a posteriori."
   ],
   "ventanas": [
-    {"id": "LUN-SHACKLETON", "cuerpo": "luna", "rol": "control_geometria", "lat": -89.67, "lon": 129.78,
-     "fuente_coordenadas": "Gazetteer IAU/USGS (cráter Shackleton, 21 km); sin verificar en esta sesión. Se usa para comprobar orientación: el centro debe ser una depresión de varios km."},
-    {"id": "LUN-MALAPERT", "cuerpo": "luna", "rol": "referencia_candidata", "lat": -85.9, "lon": -1.0,
-     "fuente_coordenadas": "Centro aproximado de terceros; región nombrada por NASA en oct. 2024"},
-    {"id": "LUN-MONS-MOUTON-PLATEAU", "cuerpo": "luna", "rol": "referencia_candidata", "lat": -84.3, "lon": 27.0,
-     "fuente_coordenadas": "Centro aproximado de terceros; región nombrada por NASA en oct. 2024"},
-    {"id": "TIE-CINDER-LAKE", "cuerpo": "tierra", "rol": "analogo_nasa", "lat": 35.3197, "lon": -111.5171,
-     "fuente_coordenadas": "USGS GNIS 27656 (Cinder Lake, clase Flat)"},
-    {"id": "TIE-SP-CRATER", "cuerpo": "tierra", "rol": "analogo_nasa", "lat": 35.5822, "lon": -111.6318,
-     "fuente_coordenadas": "USGS GNIS 33907 (S P Crater)"},
-    {"id": "TIE-SFVF", "cuerpo": "tierra", "rol": "referencia_gvp_no_es_sitio_de_ensayo", "lat": 35.347, "lon": -111.678,
-     "fuente_coordenadas": "Smithsonian GVP 329020 (San Francisco Volcanic Field). El punto está a 80 m de la cumbre de Humphreys Peak (USGS GNIS 30290): representa la montaña, no el campo de conos de los ensayos NASA."},
-    {"id": "TIE-KILAUEA", "cuerpo": "tierra", "rol": "analogo_nasa_otra_dimension", "lat": 19.421, "lon": -155.287,
-     "fuente_coordenadas": "Smithsonian GVP 332010 (Kilauea)"},
-    {"id": "TIE-DEATH-VALLEY", "cuerpo": "tierra", "rol": "analogo_nasa_marte", "lat": 36.2466, "lon": -116.817,
-     "fuente_coordenadas": "USGS GNIS 270787 (Death Valley, clase Basin)"}
+    {
+      "id": "LUN-SHACKLETON",
+      "cuerpo": "luna",
+      "rol": "control_geometria",
+      "lat": -89.67,
+      "lon": 129.78,
+      "fuente_coordenadas": "Gazetteer IAU/USGS (cráter Shackleton, 21 km); sin verificar en esta sesión. Se usa para comprobar orientación: el centro debe ser una depresión de varios km.",
+      "nombre": "Cráter Shackleton",
+      "etiquetas": []
+    },
+    {
+      "id": "LUN-MALAPERT",
+      "cuerpo": "luna",
+      "rol": "referencia_candidata",
+      "lat": -85.9,
+      "lon": -1.0,
+      "fuente_coordenadas": "Centro aproximado de terceros; región nombrada por NASA en oct. 2024",
+      "nombre": "Malapert Massif",
+      "etiquetas": []
+    },
+    {
+      "id": "LUN-MONS-MOUTON-PLATEAU",
+      "cuerpo": "luna",
+      "rol": "referencia_candidata",
+      "lat": -84.3,
+      "lon": 27.0,
+      "fuente_coordenadas": "Centro aproximado de terceros; región nombrada por NASA en oct. 2024",
+      "nombre": "Mons Mouton Plateau",
+      "etiquetas": []
+    },
+    {
+      "id": "TIE-CINDER-LAKE",
+      "cuerpo": "tierra",
+      "rol": "analogo_nasa",
+      "lat": 35.3197,
+      "lon": -111.5171,
+      "fuente_coordenadas": "USGS GNIS 27656 (Cinder Lake, clase Flat)",
+      "nombre": "Cinder Lake (Arizona)",
+      "etiquetas": [
+        "JETT3-TERRENO-01"
+      ]
+    },
+    {
+      "id": "TIE-SP-CRATER",
+      "cuerpo": "tierra",
+      "rol": "analogo_nasa",
+      "lat": 35.5822,
+      "lon": -111.6318,
+      "fuente_coordenadas": "USGS GNIS 33907 (S P Crater)",
+      "nombre": "SP Crater (Arizona)",
+      "etiquetas": [
+        "DRATS-01"
+      ]
+    },
+    {
+      "id": "TIE-SFVF",
+      "cuerpo": "tierra",
+      "rol": "referencia_gvp_no_es_sitio_de_ensayo",
+      "lat": 35.347,
+      "lon": -111.678,
+      "fuente_coordenadas": "Smithsonian GVP 329020 (San Francisco Volcanic Field). El punto está a 80 m de la cumbre de Humphreys Peak (USGS GNIS 30290): representa la montaña, no el campo de conos de los ensayos NASA.",
+      "nombre": "San Francisco Volcanic Field · cumbre (Arizona)",
+      "etiquetas": [
+        "SFVF-SIM-01",
+        "SFVF-ROCAS-01"
+      ]
+    },
+    {
+      "id": "TIE-KILAUEA",
+      "cuerpo": "tierra",
+      "rol": "analogo_nasa_otra_dimension",
+      "lat": 19.421,
+      "lon": -155.287,
+      "fuente_coordenadas": "Smithsonian GVP 332010 (Kilauea)",
+      "nombre": "Kīlauea (Hawái)",
+      "etiquetas": [
+        "AE-KILAUEA-01"
+      ]
+    },
+    {
+      "id": "TIE-DEATH-VALLEY",
+      "cuerpo": "tierra",
+      "rol": "analogo_nasa_marte",
+      "lat": 36.2466,
+      "lon": -116.817,
+      "fuente_coordenadas": "USGS GNIS 270787 (Death Valley, clase Basin)",
+      "nombre": "Death Valley (California)",
+      "etiquetas": [
+        "AE-DV-01"
+      ]
+    }
   ]
 }

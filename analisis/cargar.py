@@ -64,12 +64,20 @@ def cargar(conn, carpeta: Path):
         if stored != manifest["config_sha256"]:
             raise ValueError(f"{run_id}: ya existe con otra configuración")
         totals = {"metricas_nuevas": 0, "metricas_existentes": 0}
+        # Nombre y etiquetas son descriptivos: se leen de la configuración actual, así no hace falta recalcular.
+        config = Path(manifest.get("config", ""))
+        catalogo = ({c["id"]: c for c in json.loads(config.read_text(encoding="utf-8"))["ventanas"]}
+                    if config.is_file() else {})
         for v in manifest["ventanas"]:
             earth = v["cuerpo"] == "tierra"
-            cur.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom)
-                           VALUES (%s,%s,%s,%s,%s, CASE WHEN %s THEN ST_SetSRID(ST_MakePoint(%s,%s),4326) END)
-                           ON CONFLICT (sitio_id) DO NOTHING""",
-                        (v["id"], v["cuerpo"], v["lat"], v["lon"], v["fuente_coordenadas"], earth, v["lon"], v["lat"]))
+            extra = catalogo.get(v["id"], {})
+            cur.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, nombre, rol, etiquetas)
+                           VALUES (%s,%s,%s,%s,%s, CASE WHEN %s THEN ST_SetSRID(ST_MakePoint(%s,%s),4326) END, %s,%s,%s)
+                           ON CONFLICT (sitio_id) DO UPDATE SET rol = EXCLUDED.rol,
+                               nombre = coalesce(EXCLUDED.nombre, sitios.nombre),
+                               etiquetas = coalesce(EXCLUDED.etiquetas, sitios.etiquetas)""",
+                        (v["id"], v["cuerpo"], v["lat"], v["lon"], v["fuente_coordenadas"], earth, v["lon"], v["lat"],
+                         extra.get("nombre"), v.get("rol"), extra.get("etiquetas")))
             if una(cur, "SELECT lat, lon FROM sitios WHERE sitio_id=%s", (v["id"],)) != (v["lat"], v["lon"]):
                 raise ValueError(f"{v['id']}: el sitio ya existe con otras coordenadas")
             if v["estado"] == "error":

@@ -9,7 +9,12 @@ python3 -m venv .venv && .venv/bin/pip install -r analisis/requirements.txt -r a
 mkdir -p secretos && chmod 700 secretos
 echo 'DATABASE_URL=postgresql://tsumi:<clave>@127.0.0.1:5432/tsumi' > secretos/.env && chmod 600 secretos/.env
 
-export $(cat secretos/.env)   # una vez, para preparar la búsqueda
+# Rol de solo lectura para la API (expuesta a internet): pide la clave y no la deja en el historial
+sudo -u postgres createuser --pwprompt tsumi_lectura
+sudo -u postgres psql -d tsumi -c "GRANT CONNECT ON DATABASE tsumi TO tsumi_lectura; GRANT USAGE ON SCHEMA public TO tsumi_lectura; GRANT SELECT ON ALL TABLES IN SCHEMA public TO tsumi_lectura; ALTER DEFAULT PRIVILEGES FOR ROLE tsumi IN SCHEMA public GRANT SELECT ON TABLES TO tsumi_lectura;"
+echo 'DATABASE_URL=postgresql://tsumi_lectura:<clave>@127.0.0.1:5432/tsumi' > secretos/api.env && chmod 600 secretos/api.env
+
+export $(cat secretos/.env)   # una vez, para preparar la búsqueda (rol tsumi, que escribe)
 .venv/bin/python -m analisis.trabajador analisis/inputs/busqueda.json referencias
 .venv/bin/python -m analisis.trabajador analisis/inputs/busqueda.json encolar
 
@@ -46,3 +51,13 @@ El servidor tiene 2 vCPU, 7,7 GB de RAM y unos 91 GB libres, y lo comparte con o
 - **Para ir más rápido** se puede lanzar un segundo trabajador, porque la cola reparte las celdas con `SKIP LOCKED`.
 - **Almacenamiento:** cada celda ocupa del orden de 1 MB en `teselas` (dos escalas, sin píxeles). Es una estimación sin medir.
 - **Cortes de red:** una conexión estancada corta en unos 30 s y la celda vuelve a la cola, con un máximo de 3 intentos. Se ve como `celda_fallida` en los logs.
+
+## Publicar la API para nasa.azzu.tech (pendiente del dominio)
+
+El frontend (repo `nasa-azzu-front`) se publica en `https://nasa.azzu.tech` y llama a la API desde el navegador. Por eso la API necesita un nombre público con HTTPS: una página HTTPS no puede llamar a una API por HTTP.
+
+1. **DNS:** un registro, por ejemplo `api.nasa.azzu.tech`, que apunte a este servidor.
+2. **Proxy con TLS** en el puerto 443, que reenvíe a `127.0.0.1:8000`, por ejemplo Caddy. Antes, revisar qué usa ya los puertos 80 y 443, porque el servidor es compartido: `sudo ss -ltnp | grep -E ':(80|443)\b'`.
+3. **Frontend:** al compilarlo, `VITE_API_BASE_URL=https://api.nasa.azzu.tech/api`.
+
+La API ya cumple el contrato del frontend en `/api` (ver `api/README.md`) y limita CORS a `https://nasa.azzu.tech` (`deploy/tsumi-api.service`). PostgreSQL sigue cerrado: solo escucha en `127.0.0.1`.

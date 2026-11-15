@@ -2,7 +2,10 @@
   "version": "busqueda-1",
   "proposito": "Búsqueda continua de teselas terrestres cuyo relieve cae dentro de la envolvente P10–P90 de una región lunar. Es preselección por relieve, no certificación de analogía.",
   "tesela_m": 3000,
-  "escalas_m": [60, 120],
+  "escalas_m": [
+    60,
+    120
+  ],
   "fraccion_valida_min": 0.9,
   "minimo_subventanas": 20,
   "espera_cola_vacia_s": 600,
@@ -12,16 +15,75 @@
     "P3: Se informa la tasa base (fracción de todas las teselas con 3/3 dentro). Si supera el 30 %, la coincidencia no discrimina y se declara así."
   ],
   "referencias": [
-    {"id": "LUN-MALAPERT", "cuerpo": "luna", "lat": -85.9, "lon": -1.0, "lado_m": 15000,
-     "fuente_coordenadas": "Centro aproximado de terceros; región Artemis nombrada por NASA en oct. 2024; regiones de ~15×15 km (atlas del polo sur, LPI)"},
-    {"id": "LUN-MONS-MOUTON-PLATEAU", "cuerpo": "luna", "lat": -84.3, "lon": 27.0, "lado_m": 15000,
-     "fuente_coordenadas": "Centro aproximado de terceros; región Artemis nombrada por NASA en oct. 2024; regiones de ~15×15 km (atlas del polo sur, LPI)"}
+    {
+      "id": "LUN-MALAPERT",
+      "cuerpo": "luna",
+      "lat": -85.9,
+      "lon": -1.0,
+      "lado_m": 15000,
+      "fuente_coordenadas": "Centro aproximado de terceros; región Artemis nombrada por NASA en oct. 2024; regiones de ~15×15 km (atlas del polo sur, LPI)",
+      "nombre": "Malapert Massif"
+    },
+    {
+      "id": "LUN-MONS-MOUTON-PLATEAU",
+      "cuerpo": "luna",
+      "lat": -84.3,
+      "lon": 27.0,
+      "lado_m": 15000,
+      "fuente_coordenadas": "Centro aproximado de terceros; región Artemis nombrada por NASA en oct. 2024; regiones de ~15×15 km (atlas del polo sur, LPI)",
+      "nombre": "Mons Mouton Plateau"
+    }
   ],
   "zonas": [
-    {"nombre": "Análogos NASA: San Francisco Volcanic Field (JETT, D-RATS)", "bbox": [-112, 35, -110, 36], "prioridad": 1},
-    {"nombre": "Control negativo: celda que contiene el Parque Nacional Badlands (ubicación sin fuente citada)", "bbox": [-103, 43, -102, 44], "prioridad": 1},
-    {"nombre": "Análogo NASA de otra dimensión: Kilauea (tareas de campo)", "bbox": [-156, 19, -155, 20], "prioridad": 2},
-    {"nombre": "Análogo NASA para Marte: Death Valley", "bbox": [-117, 36, -116, 37], "prioridad": 3},
-    {"nombre": "Exploración: Meseta de Colorado", "bbox": [-114, 34, -108, 38], "prioridad": 10}
+    {
+      "nombre": "Análogos NASA: San Francisco Volcanic Field (JETT, D-RATS)",
+      "bbox": [
+        -112,
+        35,
+        -110,
+        36
+      ],
+      "prioridad": 1
+    },
+    {
+      "nombre": "Control negativo: celda que contiene el Parque Nacional Badlands (ubicación sin fuente citada)",
+      "bbox": [
+        -103,
+        43,
+        -102,
+        44
+      ],
+      "prioridad": 1
+    },
+    {
+      "nombre": "Análogo NASA de otra dimensión: Kilauea (tareas de campo)",
+      "bbox": [
+        -156,
+        19,
+        -155,
+        20
+      ],
+      "prioridad": 2
+    },
+    {
+      "nombre": "Análogo NASA para Marte: Death Valley",
+      "bbox": [
+        -117,
+        36,
+        -116,
+        37
+      ],
+      "prioridad": 3
+    },
+    {
+      "nombre": "Exploración: Meseta de Colorado",
+      "bbox": [
+        -114,
+        34,
+        -108,
+        38
+      ],
+      "prioridad": 10
+    }
   ]
 }

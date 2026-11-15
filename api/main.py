@@ -57,7 +57,7 @@ async def registrar_peticion(request, call_next):
 
 origins = [o for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o]
 if origins:
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET"], allow_headers=["*"])
+    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST"], allow_headers=["*"])
 
 
 def conectar():
@@ -154,14 +154,16 @@ def comparacion(referencia: str, res_m: float = 60, version: str = VERSION_POR_D
 SQL_DISTANCIAS = """
 WITH r AS (SELECT envolvente FROM referencias WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s),
 d AS (
-  SELECT t.*, c.zona,
+  SELECT t.*, c.zona, r.envolvente AS env,
          dist_envolvente(t.pendiente_mediana, r.envolvente->'pendiente_mediana_grados') AS d_pendiente_mediana,
          dist_envolvente(t.pendiente_p90, r.envolvente->'pendiente_p90_grados') AS d_pendiente_p90,
          dist_envolvente(t.relieve, r.envolvente->'relieve_p95_p5_m') AS d_relieve
   FROM teselas t JOIN celdas_busqueda c USING (celda_id), r
   WHERE t.res_m = %(res)s AND t.version_metodo = %(version)s)
 SELECT *, (d_pendiente_mediana = 0)::int + (d_pendiente_p90 = 0)::int + (d_relieve = 0)::int AS n_dentro,
-       greatest(d_pendiente_mediana, d_pendiente_p90, d_relieve) AS dist_max
+       greatest(d_pendiente_mediana, d_pendiente_p90, d_relieve) AS dist_max,
+       dist_mediana(pendiente_mediana, env->'pendiente_mediana_grados') + dist_mediana(pendiente_p90, env->'pendiente_p90_grados')
+         + dist_mediana(relieve, env->'relieve_p95_p5_m') AS dist_mediana
 FROM d"""
 
 
@@ -203,7 +205,7 @@ def analogos(ref: str, res_m: float = 60, version: str = VERSION_POR_DEFECTO,
     with conectar() as conn:
         env = referencia(conn, ref, res_m, version)
         rows = conn.execute(f"""SELECT *, ST_AsGeoJSON(geom)::json AS geojson FROM ({SQL_DISTANCIAS}) x
-                                WHERE n_dentro >= %(min)s ORDER BY n_dentro DESC, dist_max, celda_id, iy, ix
+                                WHERE n_dentro >= %(min)s ORDER BY n_dentro DESC, dist_max, dist_mediana, celda_id, iy, ix
                                 LIMIT %(lim)s""", params).fetchall()
         base = conn.execute(f"SELECT count(*) AS total, count(*) FILTER (WHERE n_dentro = 3) AS dentro "
                             f"FROM ({SQL_DISTANCIAS}) x", params).fetchone()
@@ -211,6 +213,7 @@ def analogos(ref: str, res_m: float = 60, version: str = VERSION_POR_DEFECTO,
     for r in rows:
         geometry = r.pop("geojson")
         r.pop("geom")
+        r.pop("env")
         features.append({"type": "Feature", "geometry": geometry, "properties": r})
     tasa = base["dentro"] / base["total"] if base["total"] else None
     return {"type": "FeatureCollection", "features": features, "metadata": {
@@ -241,6 +244,11 @@ def coherencia(ref: str, res_m: float = 60, version: str = VERSION_POR_DEFECTO):
     return {"referencia": ref, "res_m": res_m, "version_metodo": version, "sitios": rows,
             "nota": "Solo aparecen sitios cuya tesela ya fue procesada. Un percentil alto es coherente con la "
                     "declaración NASA; no es una validación estadística (N pequeño)."}
+
+
+from api.contrato import router as contrato  # noqa: E402  (usa SQL_DISTANCIAS y conectar de este módulo)
+
+app.include_router(contrato, prefix="/api")
 
 
 @app.get("/", include_in_schema=False)
