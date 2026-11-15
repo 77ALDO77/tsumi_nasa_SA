@@ -91,13 +91,17 @@ def test_search_endpoints_rank_by_envelope(monkeypatch):
         with conn.cursor() as cur:
             aplicar_migraciones(cur)
         conn.execute("DELETE FROM teselas WHERE version_metodo = 'prueba-busqueda'")
-        conn.execute("""INSERT INTO referencias VALUES ('LUN-T','luna',-85,10,15000,3000,60,'prueba-busqueda','p',25,%s,now())
+        conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
+                        fuente_coordenadas, n_subventanas, envolvente, calculado_utc)
+                        VALUES ('LUN-T','luna',-85,10,15000,3000,60,'prueba-busqueda','p',25,%s,now())
                         ON CONFLICT DO NOTHING""", (Jsonb(env),))
         conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, estado)
                         VALUES ('N10E010',10,10,'prueba','hecha') ON CONFLICT DO NOTHING""")
         for ix, (med, p90, rel) in enumerate([(6, 12, 200), (6, 30, 200), (1, 2, 5)]):
             x0 = 10 + ix * 0.1
-            conn.execute(f"""INSERT INTO teselas VALUES ('N10E010',60,'prueba-busqueda',%s,0,10.05,%s,
+            conn.execute(f"""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                             pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida)
+                             VALUES ('N10E010',60,'prueba-busqueda',%s,0,10.05,%s,
                              {square % (x0, 10, x0 + .1, 10, x0 + .1, 10.1, x0, 10.1, x0, 10)},%s,%s,%s,1,1)""",
                          (ix, x0 + .05, med, p90, rel))
         conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom)
@@ -137,9 +141,23 @@ def test_frontend_contract(monkeypatch):
                      (VERSION_POR_DEFECTO, Jsonb(env)))
         conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, estado) VALUES
                         ('N30E030',30,30,'prueba','hecha'), ('N31E031',31,31,'prueba','pendiente') ON CONFLICT DO NOTHING""")
-        conn.execute("""INSERT INTO teselas VALUES ('N30E030',60,%s,0,0,30.05,30.05,
-                        ST_GeomFromText('POLYGON((30 30,30.1 30,30.1 30.1,30 30.1,30 30))',4326),7,12,250,40,1)""",
-                     (VERSION_POR_DEFECTO,))
+        conn.execute("""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                        pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida,
+                        ndvi_max, ndvi_n, lst_dia_max_k, lst_dia_n, contexto_id)
+                        VALUES ('N30E030',60,%s,0,0,30.05,30.05,
+                        ST_GeomFromText('POLYGON((30 30,30.1 30,30.1 30.1,30 30.1,30 30))',4326),
+                        7,12,250,40,1,0.2,2,310,1,'test-modis')""",
+                      (VERSION_POR_DEFECTO,))
+        from analisis.trabajador import candidatos
+        from analisis import trabajador
+
+        meta = {"meses": ["2025-01", "2025-07"], "fuentes": [
+            {"producto": "MOD13C2", "mes": "2025-01", "url": "https://data.lpdaac.earthdatacloud.nasa.gov/test.hdf"}]}
+        conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES ('test-modis',%s,0.3)
+                        ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                        metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""", (Jsonb(meta),))
+        monkeypatch.setattr(trabajador, "contexto", lambda cfg: {"contexto_id": "test-modis"})
+        candidatos(conn, {"ndvi_umbral_vegetacion": 0.3}, "N30E030")
         for sid, lat, rol, tags in (("TIE-C", 30.05, "analogo_nasa", ["JETT3-TERRENO-01"]),
                                     ("TIE-P", 31.5, "analogo_nasa_marte", None)):
             conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, nombre, rol, etiquetas)
@@ -164,6 +182,10 @@ def test_frontend_contract(monkeypatch):
     res = done["result"]
     assert (res["earthValue"], res["referenceValue"], res["difference"], res["unit"]) == (250, 200, 50, "m")
     assert "3/3 dentro" in res["limitation"] and "dentro" in res["limitation"]
+    assert "NDVI máximo 0.2000 (2/2" in res["limitation"]
+    assert "máxima diurna 310,0 K (1 meses válidos)" in res["limitation"]
+    assert "no extremos anuales" in res["limitation"]
+    assert any("test.hdf" in s["url"] for s in res["sources"])
     assert any("nasa.gov" in s["url"] for s in res["sources"]) and set(res) == {
         "earthValue", "referenceValue", "unit", "difference", "scale", "limitation", "sources"}
     assert client.get("/api/analyses/" + done["id"]).json() == done
@@ -174,3 +196,160 @@ def test_frontend_contract(monkeypatch):
     assert client.post("/api/analyses", json={"siteId": "T~N30E030~0~0", "comparisonId": "LUN-C~pendiente_p90"}).json()["result"]["earthValue"] == 12
     assert client.get("/api/sites/NO-EXISTE/comparisons").status_code == 404
     assert client.post("/api/analyses", json={"siteId": "TIE-C", "comparisonId": "LUN-C~otra"}).status_code == 404
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_candidates_refresh_filter_limit_and_atomicity(monkeypatch):
+    from fastapi.testclient import TestClient
+    from psycopg.types.json import Jsonb
+
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+    from api import contrato
+    from api.main import app
+
+    version = "prueba-modis"
+    cfg = {"ndvi_umbral_vegetacion": .3}
+    env = {k: {"p10": a, "p50": b, "p90": c} for k, a, b, c in [
+        ("pendiente_mediana_grados", 4, 6, 8), ("pendiente_p90_grados", 10, 13, 16),
+        ("relieve_p95_p5_m", 100, 200, 300)]}
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: {"contexto_id": "qa-test"})
+    monkeypatch.setattr(contrato, "VERSION_POR_DEFECTO", version)
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM teselas WHERE version_metodo = %s", (version,))
+        conn.execute("DELETE FROM referencias WHERE version_metodo = %s", (version,))
+        conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m,
+                        version_metodo, fuente_coordenadas, n_subventanas, envolvente)
+                        VALUES ('LUN-Q','luna',-85,10,15000,3000,60,%s,'prueba',25,%s)""", (version, Jsonb(env)))
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona)
+                        VALUES ('N20E020',20,20,'qa') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES ('qa-test',%s,0.3)
+                        ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                        metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""",
+                     (Jsonb({"meses": ["2025-01", "2025-07"]}),))
+        for ix in range(42):
+            ndvi, n, ctx = (.2, 2, "qa-test")
+            if ix >= 35:
+                ndvi, n, ctx = [(.3, 2, "qa-test"), (.3001, 2, "qa-test"), (None, 0, "qa-test"),
+                                (.1, 1, "qa-test"), (.1, 2, "otro"), (.8, 2, "qa-test"), (.1, 0, "qa-test")][ix - 35]
+            conn.execute("""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                            pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida,
+                            ndvi_max, ndvi_n, contexto_id)
+                            VALUES ('N20E020',60,%s,%s,0,20.05,20.05,
+                            ST_GeomFromText('POLYGON((20 20,20.1 20,20.1 20.1,20 20.1,20 20))',4326),
+                            6,13,200,1,1,%s,%s,%s)""", (version, ix, ndvi, n, ctx))
+        assert trabajador.candidatos(conn, cfg, "N20E020") == 36
+        assert trabajador.candidatos(conn, cfg, "N20E020") == 36  # idempotente
+        conn.commit()
+        client = TestClient(app)
+        detectados = [s for s in client.get("/api/sites").json() if s["id"].startswith("T~N20E020")]
+        assert len(detectados) == 30 and detectados[-1]["id"] == "T~N20E020~29~0"
+        conn.execute("UPDATE teselas SET ndvi_max = .9 WHERE version_metodo = %s AND ix = 0", (version,))
+        assert trabajador.candidatos(conn, cfg, "N20E020") == 35  # no deja candidato obsoleto
+        conn.commit()
+        with pytest.raises(ValueError, match="Contexto/umbral"):
+            trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .2})
+        conn.rollback()
+        assert conn.execute("SELECT count(*) FROM candidatos WHERE referencia_id = 'LUN-Q'").fetchone()[0] == 35
+        env["pendiente_mediana_grados"]["p10"] = None
+        conn.execute("UPDATE referencias SET envolvente = %s WHERE referencia_id = 'LUN-Q'", (Jsonb(env),))
+        assert trabajador.candidatos(conn, cfg, "N20E020") == 0
+        conn.rollback()  # referencia + ranking vuelven juntos al estado anterior
+        assert conn.execute("SELECT count(*) FROM candidatos WHERE referencia_id = 'LUN-Q'").fetchone()[0] == 35
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_context_backfill_replaces_previous_values_and_rolls_back(tmp_path, monkeypatch):
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+
+    ctx = {"contexto_id": "backfill-nuevo", "metadata": {"meses": ["2025-01", "2025-07"], "fuentes": []}}
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: ctx)
+    monkeypatch.setattr(trabajador.modis, "preparar", lambda *args: tmp_path / "test.npz")
+    sample = {"contexto_id": ctx["contexto_id"], "ndvi_max": None, "ndvi_n": 0, "lst_dia_max_k": 305.2,
+              "lst_dia_n": 1, "lst_noche_min_k": None, "lst_noche_n": 0}
+    monkeypatch.setattr(trabajador.modis, "muestrear", lambda *args: sample)
+    cfg = {"contexto_modis": {"cache": str(tmp_path), "meses": ctx["metadata"]["meses"]}, "ndvi_umbral_vegetacion": .3}
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        # Fixture propia: esta prueba no depende de que se hayan ejecutado las anteriores.
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona)
+                        VALUES ('N21E021',21,21,'backfill') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                        pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida, ndvi_max)
+                        VALUES ('N21E021',60,'prueba-backfill',0,0,21.05,21.05,
+                        ST_GeomFromText('POLYGON((21 21,21.1 21,21.1 21.1,21 21.1,21 21))',4326),
+                        6,13,200,1,1,.2) ON CONFLICT DO NOTHING""")
+        trabajador.rellenar_contexto(conn, cfg)
+        row = conn.execute("""SELECT ndvi_max, ndvi_n, lst_dia_max_k, contexto_id FROM teselas
+                              WHERE celda_id = 'N21E021'""").fetchone()
+        assert row[0:2] == (None, 0) and abs(row[2] - 305.2) < .001 and row[3] == ctx["contexto_id"]
+        assert conn.execute("SELECT count(*) FROM candidatos").fetchone()[0] == 0
+        ctx["contexto_id"] = "no-publicar"
+        def fallo(*args):
+            raise ValueError("simula fallo durante muestreo")
+        monkeypatch.setattr(trabajador.modis, "muestrear", fallo)
+        with pytest.raises(ValueError, match="simula fallo"):
+            trabajador.rellenar_contexto(conn, cfg)
+        conn.rollback()
+        assert conn.execute("SELECT contexto_id FROM contexto_modis").fetchone()[0] == "backfill-nuevo"
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_worker_stores_context_and_refreshes_cell_candidates(monkeypatch):
+    import numpy as np
+    from psycopg.types.json import Jsonb
+    from rasterio.crs import CRS
+    from rasterio.transform import from_origin
+
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+    from analisis.metricas import VERSION_METODO
+
+    z = np.tile(np.arange(100) * 60 * np.tan(np.radians(6)), (100, 1))
+    crs = CRS.from_proj4("+proj=aeqd +lat_0=35.32 +lon_0=-111.52 +ellps=WGS84 +units=m +no_defs")
+    monkeypatch.setattr(trabajador, "ventana", lambda *a, **kw: (
+        {60: z}, {60: from_origin(-3000, 3000, 60, 60)}, crs, []))
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: {"contexto_id": "worker-test"})
+    sample = {"ndvi_max": .2, "ndvi_n": 2, "lst_dia_max_k": 310, "lst_dia_n": 2,
+              "lst_noche_min_k": 270, "lst_noche_n": 2, "contexto_id": "worker-test"}
+    monkeypatch.setattr(trabajador.modis, "muestrear", lambda *a: sample)
+    cfg = {"tesela_m": 3000, "fraccion_valida_min": .9, "escalas_m": [60], "ndvi_umbral_vegetacion": .3}
+    env = {k: {"p10": 0, "p50": 100, "p90": 1000} for k in
+           ("pendiente_mediana_grados", "pendiente_p90_grados", "relieve_p95_p5_m")}
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM teselas WHERE celda_id = 'N35W112'")
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona)
+                        VALUES ('N35W112',35,-112,'worker') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m,
+                        version_metodo, fuente_coordenadas, n_subventanas, envolvente)
+                        VALUES ('LUN-W','luna',-85,10,15000,3000,60,%s,'prueba',25,%s)
+                        ON CONFLICT (referencia_id, res_m, version_metodo)
+                        DO UPDATE SET envolvente = EXCLUDED.envolvente""", (VERSION_METODO, Jsonb(env)))
+        conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES ('worker-test',%s,.3)
+                        ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                        metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""",
+                     (Jsonb({"meses": ["2025-01", "2025-07"]}),))
+        conn.commit()
+        trabajador.procesar(conn, cfg, ("N35W112", 35, -112, 1))
+        assert conn.execute("SELECT count(*) FROM candidatos WHERE referencia_id = 'LUN-W'").fetchone()[0] == 4
+        assert conn.execute("SELECT DISTINCT ndvi_max, ndvi_n, contexto_id FROM teselas WHERE celda_id = 'N35W112'").fetchall() == [
+            (.2, 2, "worker-test")]
+        conn.commit()
+        sample["ndvi_max"] = .8
+        trabajador.procesar(conn, cfg, ("N35W112", 35, -112, 2))
+        assert conn.execute("SELECT count(*) FROM candidatos WHERE referencia_id = 'LUN-W'").fetchone()[0] == 0
+        conn.commit()
+        cfg.update({"minimo_subventanas": 4, "referencias": [{
+            "id": "LUN-W", "cuerpo": "luna", "lat": -84, "lon": 11, "lado_m": 6000,
+            "fuente_coordenadas": "coordenadas actualizadas", "nombre": "Referencia actualizada"}]})
+        trabajador.referencias(conn, cfg)
+        assert conn.execute("""SELECT lat, lon, lado_m, fuente_coordenadas FROM referencias
+                               WHERE referencia_id = 'LUN-W'""").fetchone() == (-84, 11, 6000, "coordenadas actualizadas")

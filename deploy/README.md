@@ -27,6 +27,8 @@ cd /home/aldo/nasa/tsumi_nasa_SA
 mkdir -p secretos && chmod 700 secretos
 # Rol de escritura (trabajador). Formato NOMBRE=valor, una línea.
 echo 'DATABASE_URL=postgresql://tsumi:<clave>@127.0.0.1:5432/tsumi' > secretos/.env
+# Añadir EARTHDATA_TOKEN=<token de NASA Earthdata> al archivo de escritura, sin imprimirlo.
+# Solo formato NOMBRE=valor; no NOMBRE:valor. Nunca añadirlo a secretos/api.env.
 # Rol de solo lectura (API expuesta a internet).
 sudo -u postgres createuser --pwprompt tsumi_lectura
 sudo -u postgres psql -d tsumi -c "GRANT CONNECT ON DATABASE tsumi TO tsumi_lectura; GRANT USAGE ON SCHEMA public TO tsumi_lectura; GRANT SELECT ON ALL TABLES IN SCHEMA public TO tsumi_lectura; ALTER DEFAULT PRIVILEGES FOR ROLE tsumi IN SCHEMA public GRANT SELECT ON TABLES TO tsumi_lectura;"
@@ -37,6 +39,7 @@ cd deploy
 docker compose build
 R="docker compose run --rm -T trabajador python -m analisis.trabajador analisis/inputs/busqueda.json"
 $R referencias      # envolventes lunares (P10, P50, P90); aplica las migraciones
+$R contexto         # descarga MODIS, prepara caché con QA, rellena teselas existentes y reconstruye candidatos
 $R encolar          # celdas de las zonas de analisis/inputs/busqueda.json
 docker compose up -d
 ```
@@ -60,14 +63,67 @@ cd /home/aldo/nasa/<repo que cambió> && git pull
 cd /home/aldo/nasa/tsumi_nasa_SA/deploy && docker compose up -d --build
 ```
 
-## Seguimiento (logs JSON, una línea por evento, con rotación de 5 × 10 MB por contenedor)
+### Actualización a MODIS y ranking precalculado (migración 004)
+
+El procedimiento genérico anterior no basta para esta actualización: aplicar la migración
+y rellenar el contexto **antes de arrancar la nueva API**. Ejecutar con autorización del equipo:
 
 ```bash
-docker compose logs -f --no-log-prefix trabajador | jq -c '{ts, evento, celda, estado, duracion_s}'
-docker compose logs --no-log-prefix trabajador | jq 'select(.nivel == "error")'
-docker compose logs --no-log-prefix trabajador | jq -c 'select(.evento == "fuente_leida" and .lectura_s > 60)'   # tramos lentos
-docker compose logs -f --no-log-prefix api | jq -c 'select(.evento == "peticion") | {ruta, estado, duracion_ms}'
+cd /home/aldo/nasa/tsumi_nasa_SA/deploy
+docker compose stop trabajador api
+docker compose build api
+docker compose run --rm --no-deps -T trabajador python -m analisis.trabajador analisis/inputs/busqueda.json contexto
+docker compose up -d api trabajador
+```
+
+La acción `contexto` usa `EARTHDATA_TOKEN` solo si necesita descargar HDF4. Los granulos y la
+caché con QA viven en el volumen `tsumi_modis` (no usar `docker compose down -v`).
+La API no necesita el token ni montar el volumen: lee los valores, la procedencia y el ranking de PostgreSQL.
+El directorio del volumen se inicializa con permisos del usuario no privilegiado `tsumi`.
+Se conserva la caché anterior sin QA, pero no se lee: el nuevo nombre empieza por `modis-qa-v2`.
+
+`contexto` vuelve a muestrear **todas** las teselas, incluso las que ya tenían datos, y publica
+valores, identidad del contexto, umbral y candidatos en una única transacción. Si falla,
+no publica una actualización parcial. Repetir este procedimiento si cambian los meses,
+la política QA o el umbral; reiniciar todos los trabajadores para no mezclar configuraciones.
+Si se recalculan referencias, la acción `referencias` las publica junto a su nuevo ranking.
+Los reemplazos del ranking se serializan entre trabajadores, y eliminan candidatos obsoletos.
+
+La migración no recalcula el terreno ni modifica las celdas ya procesadas. La búsqueda ampliada
+de nuevas regiones sigue pendiente; no se debe confundir contexto global MODIS con cobertura global de relieve.
+
+## Qué significa el contexto NASA
+
+- **MOD13C2.061:** NDVI mensual. Se aceptan rango válido, `pixel reliability=0` (excluye
+  relleno histórico=4), bits VI 0–1=0, sin nube adyacente/mixta y tierra (bits 11–13=1).
+  La [guía C61, §8.3.2 y §9.3.2](https://modis-land.gsfc.nasa.gov/pdf/MOD13_User_Guide_V61.pdf)
+  prevalece para estos bits sobre la especificación HTML antigua de CMG, que describe otra distribución.
+- **MOD11C3.061:** LST diurna/nocturna mensual. Se aceptan rango válido, QC 0–1≤1
+  (producida, buena u otra calidad) y bits 6–7≤1 (error medio declarado ≤2 K).
+  No se interpreta QC=0 como relleno; el relleno de LST es 0.
+  [Especificación NASA](https://ladsweb.modaps.eosdis.nasa.gov/filespec/MODIS/61/MOD11C3).
+- Enero y julio de 2025 son una muestra, **no** extremos anuales, climatología, temperatura
+  del aire, amplitud día/noche ni analogía térmica con la Luna. Cada capa conserva su número de meses válidos.
+- Malla de 0,05° (unos 5,6 km norte-sur, menos este-oeste según latitud): se muestrea
+  el píxel del centro de cada tesela de 3 km, no se mide toda su superficie.
+- El catálogo muestra hasta 30 candidatos por referencia: 3/3 variables de relieve dentro de
+  P10–P90, NDVI válido en **ambos** meses y máximo ≤0,3. Ese umbral es una heurística del
+  equipo elegida después de inspeccionar Cinder Lake, no un criterio NASA ni prueba de suelo desnudo.
+  Sin NDVI suficiente se excluye del ranking filtrado, pero los sitios registrados siguen consultables.
+- PostgreSQL conserva URLs permanentes, meses, política QA y SHA-256 de cada HDF.
+  Los resultados muestran procedencia y límites en `limitation`/`sources`, sin cambiar el contrato frontend.
+
+## Seguimiento (logs JSON, una línea por evento, con rotación de 5 × 10 MB por contenedor)
+
+Usa `docker logs`: `docker compose logs -f` en Compose 2.26 antepone el nombre del contenedor aunque se pase `--no-log-prefix`, y `jq` falla. `fromjson?` descarta cualquier línea que no sea JSON. Cada seguimiento con `-f` va en su propia terminal.
+
+```bash
+sudo docker logs -f --tail 50 tsumi-trabajador-1 2>&1 | jq -cR 'fromjson? | select(.evento != "fuente_leida") | {ts, evento, celda, estado, duracion_s}'
+sudo docker logs tsumi-trabajador-1 2>&1 | jq -cR 'fromjson? | select(.nivel == "error")'
+sudo docker logs tsumi-trabajador-1 2>&1 | jq -cR 'fromjson? | select(.evento == "fuente_leida" and .lectura_s > 60)'   # tramos lentos
+sudo docker logs -f --tail 50 tsumi-api-1 2>&1 | jq -cR 'fromjson? | select(.evento == "peticion") | {ruta, estado, duracion_ms}'
 curl -s 127.0.0.1:8000/busqueda/estado | jq    # avance de la cola (ruta interna, no se publica)
+sudo -u postgres psql -d tsumi -c "SELECT pg_size_pretty(pg_total_relation_size('teselas')), count(*), count(DISTINCT celda_id) FROM teselas;"
 ```
 
 | Evento | Servicio | Campos clave |
@@ -75,15 +131,16 @@ curl -s 127.0.0.1:8000/busqueda/estado | jq    # avance de la cola (ruta interna
 | `inicio` | trabajador | `accion`, `config_sha256`, `version_metodo` |
 | `celda_tomada` / `celda_terminada` | trabajador | `celda`, `n_validas`, `lectura_s`, `metricas_s`, `insercion_s`, `duracion_s` |
 | `fuente_leida` | trabajador | `url`, `estado`, `apertura_s`, `lectura_s` |
+| `contexto_preparado` / `contexto_rellenado` | trabajador | Identidad y fuentes con SHA-256 / teselas muestreadas y candidatos |
 | `celda_fallida` | trabajador | `celda`, `intentos`, `error`, `excepcion`. Tras 3 intentos queda en `error` |
 | `celdas_recuperadas` / `cola_vacia` / `trabajador_detenido` | trabajador | Celdas de un trabajador caído devueltas a la cola / espera / excepción que lo detuvo |
 | `peticion` / `peticion_fallida` / `base_no_disponible` | api | `metodo`, `ruta`, `estado`, `duracion_ms` |
 
-Los logs nunca incluyen `DATABASE_URL`.
+Los logs nunca deben incluir `DATABASE_URL`, `EARTHDATA_TOKEN` ni URLs de descarga firmadas.
 
 ## Rendimiento y red
 
-Por celda, el trabajador tarda de 45 a 85 s, casi todo lectura de red, con unos 5 s de CPU y unos 300 MB de RAM en el pico.
+Por celda, el trabajador tarda unos **15 s en el servidor** (de 45 a 85 s desde una red doméstica), casi todo lectura de red, con unos 5 s de CPU y unos 300 MB de RAM en el pico. Las 29 celdas iniciales se procesaron en unos 7 minutos.
 
 **Lentitud intermitente.** Algunas ejecuciones tardaron de 9 a 10 min, porque un tramo HTTP hacia el bucket de Copernicus iba muy lento. GDAL corta las conexiones estancadas (15 s para conectar, o menos de 10 KB/s durante 30 s) y reintenta 3 veces. Sus reintentos solo aparecen a nivel DEBUG, así que los tramos lentos se buscan con `fuente_leida`. Un error que no sea 404 hace fallar la celda, que vuelve a la cola: nunca se guarda un hueco como si fuera océano.
 

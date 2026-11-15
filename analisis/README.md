@@ -13,8 +13,8 @@ Cada ventana se lee por HTTP con lecturas parciales (GDAL `/vsicurl/`), sin desc
 | Tierra | Copernicus GLO-30 COG (AWS, sin cuenta) | Es un modelo de superficie. Lee varias teselas si la ventana cruza bordes |
 
 ```bash
-uv pip install -r analisis/requirements.txt        # numpy, rasterio (trae GDAL)
-python -m pytest -q analisis/tests                 # 4 pruebas sin red
+uv pip install -r analisis/requirements.txt        # numpy, rasterio/GDAL, psycopg, httpx, pyhdf/HDF4
+python -m pytest -q analisis/tests                 # 21 pruebas sin red
 python -m analisis analisis/inputs/mvp0.json --salida analisis/data/<carpeta-nueva> [--solo LUN-SHACKLETON]
 ```
 
@@ -56,9 +56,21 @@ Cómo funciona:
 - **Cola.** El trabajador toma celdas de 1° de la cola `celdas_busqueda`, por prioridad, y lee el relieve una sola vez.
 - **Teselas.** Divide cada celda en teselas de 3 km a 60 y 120 m y guarda sus métricas en `teselas`.
 - **Comparación.** Se hace en SQL al consultar la API (`/analogos`, `/coherencia`).
+- **Contexto NASA.** La acción `contexto` prepara MOD13C2 (NDVI) y MOD11C3 (LST)
+  con QA y SHA-256 de los HDF4, y muestrea todas las teselas existentes. El trabajador
+  necesita ese contexto antes de procesar nuevas celdas.
+- **Catálogo precalculado.** El trabajador mantiene `candidatos` tras cada celda, cambio de
+  referencia o contexto. `/api/sites` lee su índice, hasta 30 candidatos por referencia.
+  Exige 3/3 dentro y NDVI máximo ≤0,3 con dato válido en todos los meses seleccionados.
+  Es un filtro exploratorio, no un umbral NASA ni prueba de ausencia de vegetación.
 - **Variables que puntúan.** Pendiente mediana, pendiente P90 y relieve. La rugosidad no puntúa porque está correlacionada con el relieve.
 
 La configuración y las predicciones registradas antes del cálculo están en `inputs/busqueda.json`. El despliegue y los logs, en [deploy/README.md](../deploy/README.md).
+
+La política MODIS, limitaciones y actualización segura están en
+[deploy/README.md](../deploy/README.md#qué-significa-el-contexto-nasa).
+Enero/julio de 2025 no constituyen una climatología ni extremos anuales; su píxel de
+0,05° es contexto del centro de la tesela, no detalle de 3 km. No se puntúa analogía térmica.
 
 Primera ejecución local, 2026-11-15, con las celdas N35W111, N35W112 y N43W103:
 - **Tasa base:** de 0 % a 2,1 % de teselas con 3/3.

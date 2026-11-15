@@ -12,7 +12,8 @@
   "predicciones_registradas_antes_de_calcular": [
     "P1: La tesela que contiene Cinder Lake (USGS GNIS 27656) y la que contiene SP Crater (GNIS 33907) quedan por encima de la mediana de todas las teselas procesadas para al menos una referencia lunar. Fundamento: JETT3 describe 'challenging terrain' análogo al polo sur lunar.",
     "P2: La celda de control N43W103 tiene menor fracción de teselas con 3/3 variables dentro de la envolvente que las celdas de Arizona (N35W112, N35W111).",
-    "P3: Se informa la tasa base (fracción de todas las teselas con 3/3 dentro). Si supera el 30 %, la coincidencia no discrimina y se declara así."
+    "P3: Se informa la tasa base (fracción de todas las teselas con 3/3 dentro). Si supera el 30 %, la coincidencia no discrimina y se declara así.",
+    "Filtro de vegetación: una tesela con NDVI máximo > 0,3 (MODIS MOD13C2, ene/jul 2025) no entra en el ranking de candidatos. Umbral elegido por el equipo; registrado tras conocer el NDVI de Cinder Lake (0,284), que queda por debajo."
   ],
   "referencias": [
     {
@@ -85,5 +86,14 @@
       ],
       "prioridad": 10
     }
-  ]
+  ],
+  "ndvi_umbral_vegetacion": 0.3,
+  "contexto_modis": {
+    "meses": [
+      "2025-01",
+      "2025-07"
+    ],
+    "cache": "analisis/data/modis",
+    "nota": "MOD13C2 (NDVI) y MOD11C3 (temperatura superficial) v061 con QA, malla 0,05°. Enero y julio son una muestra de contexto; no una climatología ni extremos anuales. El ranking exige NDVI válido en ambos meses."
+  }
 }

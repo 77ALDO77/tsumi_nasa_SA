@@ -39,7 +39,7 @@ Cumple el contrato de `ANALISIS-FRONTEND.md` del repo `nasa-azzu-front` sin modi
 
 | Ruta | Respuesta |
 |---|---|
-| `GET /api/sites` | `[{id, name, lat, lon, coverage}]`: los sitios terrestres registrados y los 30 mejores candidatos (3/3) por referencia. El id de un candidato es `T~<celda>~<ix>~<iy>` |
+| `GET /api/sites` | `[{id, name, lat, lon, coverage}]`: los sitios terrestres registrados y hasta 30 candidatos por referencia, leídos del ranking indexado del trabajador (3/3 y filtro NDVI). El id de un candidato es `T~<celda>~<ix>~<iy>` |
 | `GET /api/sites/{id}/comparisons` | `[{id, label, variable, reference}]`: una por referencia y variable. El id es `<referencia>~<variable>` |
 | `POST /api/analyses` `{siteId, comparisonId}` | `{id, status, result?, message?}`. Responde al momento: las métricas ya están calculadas, así que nunca queda `pending`. Si la celda del sitio aún no se procesó, devuelve `insufficient_data` con el estado de la celda |
 | `GET /api/analyses/{siteId}\|{comparisonId}` | Lo mismo |
@@ -47,5 +47,14 @@ Cumple el contrato de `ANALISIS-FRONTEND.md` del repo `nasa-azzu-front` sin modi
 En `result`:
 - `earthValue` es la tesela de 3 km a 60 m;
 - `referenceValue` es la **mediana** de la envolvente de 3 km de la región lunar, siempre a la misma escala;
-- `limitation` incluye el rango P10–P90, el resumen k/3, las rupturas y el descargo;
-- `sources` incluye el artículo NASA de la etiqueta del sitio, LOLA y Copernicus.
+- `limitation` incluye el rango P10–P90, el resumen k/3, el contexto NASA MODIS cuando está
+  disponible (NDVI/LST, meses, cobertura válida, política QA y límites), las rupturas y el descargo;
+- `sources` incluye el artículo NASA de la etiqueta del sitio, LOLA, Copernicus y las URLs
+  permanentes de los granulos MODIS utilizados, sin credenciales.
+
+El ranking filtrado exige NDVI máximo ≤0,3 válido en todos los meses seleccionados
+(actualmente enero y julio de 2025). Es una heurística del equipo, no una definición NASA
+de terreno sin vegetación. La LST no puntúa similitud térmica: no hay datos lunares térmicos
+en este perfil. `/analogos` y `/coherencia` conservan su comparación de relieve **sin** filtro NDVI.
+La API necesita la migración 004 y el relleno `contexto` antes del despliegue:
+ver [deploy/README.md](../deploy/README.md#actualización-a-modis-y-ranking-precalculado-migración-004).

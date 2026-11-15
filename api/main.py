@@ -152,19 +152,8 @@ def comparacion(referencia: str, res_m: float = 60, version: str = VERSION_POR_D
 
 
 SQL_DISTANCIAS = """
-WITH r AS (SELECT envolvente FROM referencias WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s),
-d AS (
-  SELECT t.*, c.zona, r.envolvente AS env,
-         dist_envolvente(t.pendiente_mediana, r.envolvente->'pendiente_mediana_grados') AS d_pendiente_mediana,
-         dist_envolvente(t.pendiente_p90, r.envolvente->'pendiente_p90_grados') AS d_pendiente_p90,
-         dist_envolvente(t.relieve, r.envolvente->'relieve_p95_p5_m') AS d_relieve
-  FROM teselas t JOIN celdas_busqueda c USING (celda_id), r
-  WHERE t.res_m = %(res)s AND t.version_metodo = %(version)s)
-SELECT *, (d_pendiente_mediana = 0)::int + (d_pendiente_p90 = 0)::int + (d_relieve = 0)::int AS n_dentro,
-       greatest(d_pendiente_mediana, d_pendiente_p90, d_relieve) AS dist_max,
-       dist_mediana(pendiente_mediana, env->'pendiente_mediana_grados') + dist_mediana(pendiente_p90, env->'pendiente_p90_grados')
-         + dist_mediana(relieve, env->'relieve_p95_p5_m') AS dist_mediana
-FROM d"""
+SELECT * FROM teselas_referencia
+WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s"""
 
 
 def referencia(conn, ref, res_m, version):

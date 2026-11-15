@@ -23,6 +23,8 @@ services:
     depends_on: [api]   # asegura que la imagen se construya antes
     network_mode: host
     env_file: ${WORKER_ENV_FILE:-../secretos/.env}   # rol tsumi (escribe teselas)
+    volumes:
+      - modis:/app/analisis/data/modis
     command: python -m analisis.trabajador analisis/inputs/busqueda.json bucle
     restart: unless-stopped
     <<: *logs
@@ -38,3 +40,6 @@ services:
     network_mode: host
     restart: unless-stopped
     <<: *logs
+
+volumes:
+  modis:

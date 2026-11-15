@@ -3,6 +3,7 @@
 Desde la raíz, con DATABASE_URL en el entorno:
   python -m analisis.trabajador analisis/inputs/busqueda.json referencias   # envolventes lunares
   python -m analisis.trabajador analisis/inputs/busqueda.json encolar       # celdas de las zonas
+  python -m analisis.trabajador analisis/inputs/busqueda.json contexto      # MODIS (NASA) por tesela; requiere EARTHDATA_TOKEN
   python -m analisis.trabajador analisis/inputs/busqueda.json una           # procesa una celda
   python -m analisis.trabajador analisis/inputs/busqueda.json bucle         # servicio: no termina
 Varios trabajadores pueden correr a la vez: cada celda se reserva con FOR UPDATE SKIP LOCKED.
@@ -19,6 +20,7 @@ import psycopg
 import rasterio
 from psycopg.types.json import Jsonb
 
+from . import modis
 from .busqueda import caja_celda, envolvente, geometrias
 from .cargar import aplicar_migraciones
 from .fuentes import ventana
@@ -28,6 +30,45 @@ from .registro import configurar, evento
 log = configurar("trabajador")
 
 MAX_INTENTOS = 3
+_contexto = {}
+
+
+def contexto(cfg):
+    """Carga una vez; detecta reemplazos y nunca reutiliza la caché anterior sin QA."""
+    c = cfg["contexto_modis"]
+    npz = modis.ruta_cache(Path(c["cache"]), c["meses"])
+    if not npz.exists():
+        raise ValueError("Falta caché MODIS con QA; ejecutar primero la acción contexto")
+    clave = (str(npz.resolve()), npz.stat().st_mtime_ns)
+    if _contexto.get("clave") != clave:
+        _contexto["ctx"] = modis.cargar(npz, c["meses"])
+        _contexto["clave"] = clave
+    return _contexto["ctx"]
+
+
+def comprobar_contexto(conn, cfg):
+    activo = conn.execute("SELECT contexto_id, umbral_ndvi FROM contexto_modis").fetchone()
+    if activo != (contexto(cfg)["contexto_id"], cfg["ndvi_umbral_vegetacion"]):
+        raise ValueError("Contexto/umbral MODIS distinto al de la base; detener trabajadores y ejecutar contexto")
+
+
+def candidatos(conn, cfg, celda=None):
+    """Reemplazo atómico: elimina también filas que dejaron de cumplir el filtro."""
+    conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
+    filtro = "t.celda_id = %(celda)s" if celda is not None else "TRUE"
+    conn.execute("DELETE FROM candidatos" + (" WHERE celda_id = %s" if celda is not None else ""),
+                 (celda,) if celda is not None else ())
+    if not conn.execute("SELECT 1 FROM contexto_modis").fetchone():
+        return 0
+    comprobar_contexto(conn, cfg)
+    cur = conn.execute(f"""INSERT INTO candidatos
+                           SELECT t.referencia_id, t.res_m, t.version_metodo, t.celda_id, t.ix, t.iy, t.lat, t.lon,
+                                  t.dist_mediana
+                           FROM teselas_referencia t JOIN contexto_modis c ON t.contexto_id = c.contexto_id
+                           WHERE t.n_dentro = 3 AND {filtro} AND t.dist_mediana IS NOT NULL
+                           AND t.ndvi_n = jsonb_array_length(c.metadata->'meses') AND t.ndvi_max <= c.umbral_ndvi""",
+                       {"celda": celda})
+    return cur.rowcount
 
 
 def celda_id(lat, lon):
@@ -36,18 +77,23 @@ def celda_id(lat, lon):
 
 def referencias(conn, cfg):
     tesela_m, minimo = cfg["tesela_m"], cfg["fraccion_valida_min"]
+    conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
     for ref in cfg["referencias"]:
         grids, transforms, crs, _ = ventana(ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], cfg["escalas_m"])
         for res, z in grids.items():
             env, n = envolvente(metricas_teselas(z, res, round(tesela_m / res), minimo), cfg["minimo_subventanas"])
             conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
-                            fuente_coordenadas, n_subventanas, envolvente, nombre) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                            ON CONFLICT (referencia_id, res_m, version_metodo) DO UPDATE SET envolvente = EXCLUDED.envolvente,
-                            n_subventanas = EXCLUDED.n_subventanas, nombre = EXCLUDED.nombre, calculado_utc = now()""",
+                             fuente_coordenadas, n_subventanas, envolvente, nombre) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                             ON CONFLICT (referencia_id, res_m, version_metodo) DO UPDATE SET envolvente = EXCLUDED.envolvente,
+                             n_subventanas = EXCLUDED.n_subventanas, nombre = EXCLUDED.nombre,
+                             lat = EXCLUDED.lat, lon = EXCLUDED.lon, lado_m = EXCLUDED.lado_m,
+                             tesela_m = EXCLUDED.tesela_m, fuente_coordenadas = EXCLUDED.fuente_coordenadas,
+                             calculado_utc = now()""",
                          (ref["id"], ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], tesela_m, res, VERSION_METODO,
                           ref["fuente_coordenadas"], n, Jsonb(env), ref.get("nombre")))
-            conn.commit()
             evento(log, "referencia_calculada", referencia=ref["id"], res_m=res, n_subventanas=n, envolvente=env)
+    evento(log, "candidatos_reconstruidos", n=candidatos(conn, cfg))
+    conn.commit()
 
 
 def encolar(conn, cfg):
@@ -86,7 +132,10 @@ def procesar(conn, cfg, celda):
                lectura_s=f.get("lectura_s"), duracion_s=f.get("duracion_s"))
     t_metricas = t_insercion = 0.0
     n_total = n_validas = 0
+    ctx = contexto(cfg)
     with conn.transaction():
+        conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
+        comprobar_contexto(conn, cfg)
         for res, z in grids.items():
             t1 = time.monotonic()
             teselas = metricas_teselas(z, res, round(tesela_m / res), minimo)
@@ -94,24 +143,67 @@ def procesar(conn, cfg, celda):
             ok = [t for t in teselas if t["estado"] == "calculado"]
             n_validas += len(ok)
             geometrias(transforms[res], crs, round(tesela_m / res), ok, "EPSG:4326")
+            for t in ok:
+                t.update(modis.muestrear(ctx, t["lat"], t["lon"]))
             t2 = time.monotonic()
             t_metricas += t2 - t1
             conn.cursor().executemany(
                 """INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom, pendiente_mediana,
-                   pendiente_p90, relieve, rugosidad, fraccion_valida) VALUES (%s,%s,%s,%s,%s,%s,%s,
-                   ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                   pendiente_p90, relieve, rugosidad, fraccion_valida, ndvi_max, lst_dia_max_k, lst_noche_min_k,
+                   ndvi_n, lst_dia_n, lst_noche_n, contexto_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (celda_id, res_m, version_metodo, ix, iy) DO UPDATE SET
+                   ndvi_max = EXCLUDED.ndvi_max, lst_dia_max_k = EXCLUDED.lst_dia_max_k,
+                   lst_noche_min_k = EXCLUDED.lst_noche_min_k, ndvi_n = EXCLUDED.ndvi_n,
+                   lst_dia_n = EXCLUDED.lst_dia_n, lst_noche_n = EXCLUDED.lst_noche_n,
+                   contexto_id = EXCLUDED.contexto_id""",
                 [(cid, res, VERSION_METODO, t["ix"], t["iy"], t["lat"], t["lon"],
                   json.dumps({"type": "Polygon", "coordinates": [t["poligono"]]}), t["pendiente_mediana_grados"],
-                  t["pendiente_p90_grados"], t["relieve_p95_p5_m"], t["rugosidad_rms_plano_m"], t["fraccion_valida"])
+                  t["pendiente_p90_grados"], t["relieve_p95_p5_m"], t["rugosidad_rms_plano_m"], t["fraccion_valida"],
+                   t["ndvi_max"], t["lst_dia_max_k"], t["lst_noche_min_k"],
+                   t["ndvi_n"], t["lst_dia_n"], t["lst_noche_n"], t["contexto_id"])
                  for t in ok])
             t_insercion += time.monotonic() - t2
         estado = "hecha" if n_validas else "sin_datos"
         motivo = None if n_validas else "; ".join(f["estado"] for f in fuentes) or "sin teselas válidas"
         conn.execute("""UPDATE celdas_busqueda SET estado = %s, n_teselas = %s, n_validas = %s, error = %s,
                         actualizado_utc = now() WHERE celda_id = %s""", (estado, n_total, n_validas, motivo, cid))
+        n_candidatos = candidatos(conn, cfg, cid)
     evento(log, "celda_terminada", celda=cid, estado=estado, n_validas=n_validas, n_teselas=n_total,
            lectura_s=round(t_lectura, 2), metricas_s=round(t_metricas, 2), insercion_s=round(t_insercion, 2),
-           duracion_s=round(time.monotonic() - t0, 2), motivo=motivo)
+           duracion_s=round(time.monotonic() - t0, 2), motivo=motivo, candidatos=n_candidatos)
+
+
+def rellenar_contexto(conn, cfg):
+    """Sustituye contexto y ranking juntos; ejecutar sin otros trabajadores activos."""
+    token = os.environ.get("EARTHDATA_TOKEN", "")
+    c = cfg["contexto_modis"]
+    t0 = time.monotonic()
+    npz = modis.preparar(Path(c["cache"]), c["meses"], token)
+    ctx = contexto(cfg)
+    evento(log, "contexto_preparado", archivo=str(npz), contexto_id=ctx["contexto_id"],
+           granulos=ctx["metadata"]["fuentes"], duracion_s=round(time.monotonic() - t0, 1))
+    conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
+    conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES (%s,%s,%s)
+                    ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                    metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""",
+                 (ctx["contexto_id"], Jsonb(ctx["metadata"]), cfg["ndvi_umbral_vegetacion"]))
+    total = 0
+    with conn.cursor(name="muestreo_modis") as cur:
+        cur.execute("SELECT celda_id, res_m, version_metodo, ix, iy, lat, lon FROM teselas")
+        while filas := cur.fetchmany(2000):
+            valores = [(m["ndvi_max"], m["lst_dia_max_k"], m["lst_noche_min_k"], m["ndvi_n"], m["lst_dia_n"],
+                        m["lst_noche_n"], m["contexto_id"], *f[:5])
+                       for f in filas for m in [modis.muestrear(ctx, f[5], f[6])]]
+            with conn.cursor() as escritura:
+                escritura.executemany("""UPDATE teselas SET ndvi_max = %s, lst_dia_max_k = %s, lst_noche_min_k = %s,
+                                         ndvi_n = %s, lst_dia_n = %s, lst_noche_n = %s, contexto_id = %s
+                                         WHERE celda_id = %s AND res_m = %s AND version_metodo = %s AND ix = %s AND iy = %s""",
+                                      valores)
+            total += len(filas)
+    n = candidatos(conn, cfg)
+    conn.commit()
+    evento(log, "contexto_rellenado", teselas=total, candidatos=n)
 
 
 def fallo(conn, celda, exc):
@@ -127,7 +219,7 @@ def fallo(conn, celda, exc):
 def main():
     parser = argparse.ArgumentParser(description="Búsqueda continua de análogos por relieve.")
     parser.add_argument("config", type=Path)
-    parser.add_argument("accion", choices=["referencias", "encolar", "una", "bucle"])
+    parser.add_argument("accion", choices=["referencias", "encolar", "contexto", "una", "bucle"])
     args = parser.parse_args()
     if not os.environ.get("DATABASE_URL"):
         parser.error("Falta DATABASE_URL")
@@ -148,6 +240,10 @@ def main():
             return referencias(conn, cfg)
         if args.accion == "encolar":
             return encolar(conn, cfg)
+        if args.accion == "contexto":
+            return rellenar_contexto(conn, cfg)
+        comprobar_contexto(conn, cfg)
+        conn.commit()
         while True:
             celda = tomar(conn)
             if celda is None:

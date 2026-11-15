@@ -65,8 +65,8 @@ def sites():
                for s in conn.execute("SELECT * FROM sitios WHERE cuerpo = 'tierra' ORDER BY sitio_id").fetchall()]
         seen = set()
         for ref in referencias(conn):
-            # shortcut: ordena todas las teselas en cada llamada; con millones de filas, materializar por referencia.
-            rows = conn.execute(f"""SELECT celda_id, ix, iy, lat, lon FROM ({SQL_DISTANCIAS}) x WHERE n_dentro = 3
+            rows = conn.execute("""SELECT celda_id, ix, iy, lat, lon FROM candidatos
+                                     WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s
                                     ORDER BY dist_mediana, celda_id, iy, ix LIMIT %(lim)s""",
                                 {"ref": ref["referencia_id"], "res": RES_M, "version": VERSION_POR_DEFECTO,
                                  "lim": CANDIDATOS_POR_REFERENCIA}).fetchall()
@@ -78,6 +78,29 @@ def sites():
                 out.append({"id": sid, "name": f"Candidato {coordenadas(r['lat'], r['lon'])}", "lat": r["lat"],
                             "lon": r["lon"], "coverage": f"Candidato detectado · 3/3 frente a {ref['nombre']}"})
     return out
+
+
+def contexto_nasa(tile, activo):
+    if activo is None or tile["contexto_id"] != activo["contexto_id"]:
+        return "Contexto NASA MODIS aún no disponible para esta tesela.", []
+    meta = activo["metadata"]
+    meses = ", ".join(meta["meses"])
+    ndvi = (f"NDVI máximo {tile['ndvi_max']:.4f} ({tile['ndvi_n']}/{len(meta['meses'])} meses válidos)"
+            if tile["ndvi_max"] is not None else "NDVI sin dato válido")
+    temperaturas = []
+    for clave, conteo, nombre in (("lst_dia_max_k", "lst_dia_n", "máxima diurna"),
+                                 ("lst_noche_min_k", "lst_noche_n", "mínima nocturna")):
+        temperaturas.append(f"{nombre} {cifra(tile[clave], 'K')} ({tile[conteo]} meses válidos)"
+                            if tile[clave] is not None else f"{nombre} sin dato válido")
+    texto = (f"NASA MODIS 061, meses {meses}, píxel de 0,05° en el centro de la tesela (no detalle de 3 km): "
+             f"{ndvi}; LST: {', '.join(temperaturas)}. Filtro heurístico NDVI ≤ {activo['umbral_ndvi']:g} "
+             "con dato válido en todos los meses; no demuestra ausencia de vegetación. "
+             "QA: NDVI ideal sobre tierra; LST producida (buena u otra calidad), error medio declarado ≤2 K. "
+             "Son máximos/mínimos de medias mensuales disponibles: no extremos anuales, temperatura del aire, "
+             "amplitud diurna ni comparación térmica lunar. "
+             "El relieve puede orientar ensayos de movilidad y navegación; requiere inspección de campo.")
+    fuentes = [{"title": f"NASA {f['producto']} 061 · {f['mes']}", "url": f["url"]} for f in meta["fuentes"]]
+    return texto, fuentes
 
 
 def tesela_de(site_id: str):
@@ -131,6 +154,7 @@ def analizar(site_id: str, comparison_id: str) -> dict:
             estado = f"{celda['celda_id']}: {celda['estado']}" if celda else "la celda no está en la cola de búsqueda"
             return {"id": ident, "status": "insufficient_data",
                     "message": f"La tesela de este sitio aún no se ha calculado ({estado})."}
+        activo = conn.execute("SELECT * FROM contexto_modis").fetchone()
     env = ref["envolvente"][key]
     if env.get("p50") is None:
         return {"id": ident, "status": "insufficient_data",
@@ -138,6 +162,7 @@ def analizar(site_id: str, comparison_id: str) -> dict:
     earth, mid = tile[col], env["p50"]
     dentro = tile["d_" + col] == 0
     fuentes = [etiquetas()[e] for e in (sitio or {}).get("etiquetas") or [] if e in etiquetas()]
+    contexto, fuentes_modis = contexto_nasa(tile, activo)
     return {"id": ident, "status": "completed", "result": {
         "earthValue": round(earth, 2), "referenceValue": round(mid, 2), "unit": unidad,
         "difference": round(earth - mid, 2),
@@ -145,8 +170,9 @@ def analizar(site_id: str, comparison_id: str) -> dict:
                   f"{ref['n_subventanas']} subventanas de 3 km de {ref['nombre'] or ref_id} (LRO LOLA)."),
         "limitation": (f"{nombre}: la referencia va de {cifra(env['p10'], unidad)} a {cifra(env['p90'], unidad)} "
                        f"(P10–P90) y este sitio queda {'dentro' if dentro else 'fuera'}. En las 3 variables de relieve, "
-                       f"{tile['n_dentro']}/3 dentro de la envolvente. " + " ".join(LIMITES[ref["cuerpo"]]) + " " + DESCARGO),
-        "sources": fuentes + FUENTES_DATOS}}
+                        f"{tile['n_dentro']}/3 dentro de la envolvente. " + contexto + " "
+                        + " ".join(LIMITES[ref["cuerpo"]]) + " " + DESCARGO),
+        "sources": fuentes + FUENTES_DATOS + fuentes_modis}}
 
 
 @router.post("/analyses")

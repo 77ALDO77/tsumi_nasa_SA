@@ -12,6 +12,8 @@ COPY api/ api/
 COPY db/ db/
 # La API lee las fuentes NASA de las etiquetas para «Fuentes y límites».
 COPY scrapping/docs/etiquetas_analogos.json scrapping/docs/etiquetas_analogos.json
-RUN useradd --system --no-create-home tsumi
+RUN useradd --system --no-create-home tsumi \
+    && mkdir -p /app/analisis/data/modis \
+    && chown tsumi:tsumi /app/analisis/data/modis
 USER tsumi
 ENV PYTHONUNBUFFERED=1
