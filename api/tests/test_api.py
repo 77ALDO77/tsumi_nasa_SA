@@ -74,3 +74,43 @@ def test_frontend_is_served():
     assert client.get("/", follow_redirects=False).headers["location"] == "/app/"
     page = client.get("/app/")
     assert page.status_code == 200 and 'id="mapa"' in page.text
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere TEST_DATABASE_URL (PostgreSQL + PostGIS desechable)")
+def test_search_endpoints_rank_by_envelope(monkeypatch):
+    from fastapi.testclient import TestClient
+    from psycopg.types.json import Jsonb
+
+    from analisis.cargar import aplicar_migraciones
+    from api.main import app
+
+    env = {"pendiente_mediana_grados": {"p10": 4, "p90": 8}, "pendiente_p90_grados": {"p10": 10, "p90": 16},
+           "relieve_p95_p5_m": {"p10": 100, "p90": 300}}
+    square = "ST_GeomFromText('POLYGON((%s %s,%s %s,%s %s,%s %s,%s %s))',4326)"
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM teselas WHERE version_metodo = 'prueba-busqueda'")
+        conn.execute("""INSERT INTO referencias VALUES ('LUN-T','luna',-85,10,15000,3000,60,'prueba-busqueda','p',25,%s,now())
+                        ON CONFLICT DO NOTHING""", (Jsonb(env),))
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona, estado)
+                        VALUES ('N10E010',10,10,'prueba','hecha') ON CONFLICT DO NOTHING""")
+        for ix, (med, p90, rel) in enumerate([(6, 12, 200), (6, 30, 200), (1, 2, 5)]):
+            x0 = 10 + ix * 0.1
+            conn.execute(f"""INSERT INTO teselas VALUES ('N10E010',60,'prueba-busqueda',%s,0,10.05,%s,
+                             {square % (x0, 10, x0 + .1, 10, x0 + .1, 10.1, x0, 10.1, x0, 10)},%s,%s,%s,1,1)""",
+                         (ix, x0 + .05, med, p90, rel))
+        conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom)
+                        VALUES ('TIE-T','tierra',10.05,10.05,'prueba',ST_SetSRID(ST_MakePoint(10.05,10.05),4326))
+                        ON CONFLICT DO NOTHING""")
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    client = TestClient(app)
+    out = client.get("/analogos/LUN-T", params={"version": "prueba-busqueda", "minimo_dentro": 0}).json()
+    ranked = [(f["properties"]["ix"], f["properties"]["n_dentro"]) for f in out["features"]]
+    assert ranked == [(0, 3), (1, 2), (2, 0)]
+    assert out["metadata"]["tasa_base"] == 1 / 3
+    assert client.get("/analogos/LUN-T", params={"version": "prueba-busqueda"}).json()["features"][0]["properties"]["ix"] == 0
+    coh = client.get("/coherencia/LUN-T", params={"version": "prueba-busqueda"}).json()["sitios"]
+    assert coh[0]["sitio_id"] == "TIE-T" and coh[0]["n_dentro"] == 3 and abs(coh[0]["percentil"] - 2 / 3) < 1e-9
+    assert client.get("/busqueda/estado").json()["celdas"]["hecha"] >= 1
+    assert client.get("/analogos/NO-EXISTE").status_code == 404

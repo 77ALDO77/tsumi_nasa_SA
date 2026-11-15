@@ -1,0 +1,18 @@
+# Búsqueda continua de análogos. Logs JSON en journald:
+#   journalctl -u tsumi-trabajador -f -o cat | jq .
+[Unit]
+Description=tsumi: trabajador de búsqueda de análogos
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=aldo
+WorkingDirectory=/home/aldo/tsumi_nasa_SA
+# Solo necesita DATABASE_URL=postgresql://tsumi:<clave>@127.0.0.1:5432/tsumi (formato NOMBRE=valor).
+EnvironmentFile=/home/aldo/tsumi_nasa_SA/secretos/.env
+ExecStart=/home/aldo/tsumi_nasa_SA/.venv/bin/python -m analisis.trabajador analisis/inputs/busqueda.json bucle
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

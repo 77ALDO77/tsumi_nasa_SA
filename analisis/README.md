@@ -48,3 +48,20 @@ Código de salida `2` si alguna ventana no se pudo calcular. En Windows, si GDAL
 **Comprobación de orientación (2026-11-15).** En la ventana de 15 km centrada en Shackleton (89,67° S, 129,78° E), el centro queda 3,1 km por debajo del borde. El CRS escrito a mano y el que construye GDAL a partir de la etiqueta asignan los mismos píxeles.
 
 Estas cifras son una inspección de datos, no una prueba de coherencia con NASA. La regla de coincidencia y la línea base se fijan en el preregistro ([concepts_brief.md](../concepts_brief.md)).
+
+## Búsqueda continua (`python -m analisis.trabajador`)
+
+Cómo funciona:
+- **Referencia.** Cada región lunar de 15 km se divide en 25 subventanas de 3 km, y su rango P10–P90 por variable forma la envolvente.
+- **Cola.** El trabajador toma celdas de 1° de la cola `celdas_busqueda`, por prioridad, y lee el relieve una sola vez.
+- **Teselas.** Divide cada celda en teselas de 3 km a 60 y 120 m y guarda sus métricas en `teselas`.
+- **Comparación.** Se hace en SQL al consultar la API (`/analogos`, `/coherencia`).
+- **Variables que puntúan.** Pendiente mediana, pendiente P90 y relieve. La rugosidad no puntúa porque está correlacionada con el relieve.
+
+La configuración y las predicciones registradas antes del cálculo están en `inputs/busqueda.json`. El despliegue y los logs, en [deploy/README.md](../deploy/README.md).
+
+Primera ejecución local, 2026-11-15, con las celdas N35W111, N35W112 y N43W103:
+- **Tasa base:** de 0 % a 2,1 % de teselas con 3/3.
+- **P2 se cumple:** el control N43W103 tiene 0 %, frente a un 0,2–2,1 % en Arizona.
+- **P1 se cumple a medias:** SP Crater queda en el percentil 0,85–0,98, pero Cinder Lake en el 0,19–0,31. El punto GNIS de Cinder Lake es de clase *Flat* (el fondo del lago), no el campo de cráteres. No se corrigió después de ver el resultado.
+- **Tiempo por celda:** una celda tardó 59 s, casi todo en lectura de red, y otras dos unos 10 min. Los logs `fuente_leida` registran la apertura y la lectura de cada tesela para medirlo en el servidor.

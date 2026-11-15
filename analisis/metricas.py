@@ -19,8 +19,23 @@ def pendiente_grados(z: np.ndarray, res_m: float) -> np.ndarray:
 
 
 def metricas(z: np.ndarray, res_m: float, fraccion_valida_min: float) -> dict:
-    valid = np.isfinite(z)
+    return resumen(z, pendiente_grados(z, res_m), res_m, fraccion_valida_min)
+
+
+def metricas_teselas(z: np.ndarray, res_m: float, tesela_px: int, fraccion_valida_min: float) -> list[dict]:
+    """Métricas de cada tesela cuadrada de `tesela_px`; la pendiente se calcula una vez sobre toda la caja,
+    así los bordes de cada tesela usan a sus vecinos reales en lugar de perderse."""
     slope = pendiente_grados(z, res_m)
+    out = []
+    for iy in range(z.shape[0] // tesela_px):
+        for ix in range(z.shape[1] // tesela_px):
+            cut = np.s_[iy * tesela_px:(iy + 1) * tesela_px, ix * tesela_px:(ix + 1) * tesela_px]
+            out.append({"iy": iy, "ix": ix, **resumen(z[cut], slope[cut], res_m, fraccion_valida_min)})
+    return out
+
+
+def resumen(z: np.ndarray, slope: np.ndarray, res_m: float, fraccion_valida_min: float) -> dict:
+    valid = np.isfinite(z)
     slope = slope[np.isfinite(slope)]
     base = {"n_celdas": int(z.size), "n_celdas_validas": int(valid.sum()),
             "fraccion_valida": round(float(valid.mean()), 4), "res_m": res_m}

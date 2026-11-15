@@ -1,9 +1,12 @@
 """API de solo lectura sobre las métricas de relieve cargadas por analisis.cargar.
 
 Desde la raíz: DATABASE_URL=... uvicorn api.main:app --host 127.0.0.1 --port 8000
-No calcula nada: lee la base. No ordena candidatos hasta que exista la envolvente de referencia preregistrada.
+No calcula rásteres: lee la base. /comparacion no ordena; /analogos ordena por la envolvente P10–P90 de la referencia.
+Logs: una línea JSON por petición (analisis.registro); lanzar uvicorn con --no-access-log para no duplicarlos.
 """
+import logging
 import os
+import time
 from pathlib import Path
 
 import psycopg
@@ -12,6 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg.rows import dict_row
+
+from analisis.registro import configurar, evento
+
+log = configurar("api")
 
 VERSION_POR_DEFECTO = "relieve-v2-aeqd-average-horn-ldec"
 DESCARGO = ("Comparación de relieve calculada con modelos digitales de elevación. No es una certificación de "
@@ -33,6 +40,21 @@ LIMITES = {
 }
 
 app = FastAPI(title="Análogos terrestres: API de lectura", version="0.1.0")
+
+
+@app.middleware("http")
+async def registrar_peticion(request, call_next):
+    inicio = time.monotonic()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        evento(log, "peticion_fallida", logging.ERROR, exc_info=exc, metodo=request.method, ruta=request.url.path)
+        raise
+    evento(log, "peticion", metodo=request.method, ruta=request.url.path, consulta=str(request.url.query) or None,
+           estado=response.status_code, duracion_ms=round((time.monotonic() - inicio) * 1000, 1))
+    return response
+
+
 origins = [o for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o]
 if origins:
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET"], allow_headers=["*"])
@@ -45,6 +67,7 @@ def conectar():
     try:
         return psycopg.connect(dsn, row_factory=dict_row, connect_timeout=5)
     except psycopg.OperationalError as exc:
+        evento(log, "base_no_disponible", logging.ERROR, error=type(exc).__name__)
         raise HTTPException(503, "Base de datos no disponible") from exc
 
 
@@ -126,6 +149,98 @@ def comparacion(referencia: str, res_m: float = 60, version: str = VERSION_POR_D
             "orden": "sin_ranking: falta la envolvente de referencia y la línea base preregistradas",
             "limites": LIMITES[ref["cuerpo"]], "descargo": DESCARGO,
             "candidatos": [comparar(t, ref) for t in ventanas("tierra", None, res_m, version)]}
+
+
+SQL_DISTANCIAS = """
+WITH r AS (SELECT envolvente FROM referencias WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s),
+d AS (
+  SELECT t.*, c.zona,
+         dist_envolvente(t.pendiente_mediana, r.envolvente->'pendiente_mediana_grados') AS d_pendiente_mediana,
+         dist_envolvente(t.pendiente_p90, r.envolvente->'pendiente_p90_grados') AS d_pendiente_p90,
+         dist_envolvente(t.relieve, r.envolvente->'relieve_p95_p5_m') AS d_relieve
+  FROM teselas t JOIN celdas_busqueda c USING (celda_id), r
+  WHERE t.res_m = %(res)s AND t.version_metodo = %(version)s)
+SELECT *, (d_pendiente_mediana = 0)::int + (d_pendiente_p90 = 0)::int + (d_relieve = 0)::int AS n_dentro,
+       greatest(d_pendiente_mediana, d_pendiente_p90, d_relieve) AS dist_max
+FROM d"""
+
+
+def referencia(conn, ref, res_m, version):
+    row = conn.execute("SELECT * FROM referencias WHERE referencia_id = %s AND res_m = %s AND version_metodo = %s",
+                       (ref, res_m, version)).fetchone()
+    if row is None:
+        raise HTTPException(404, f"Sin envolvente para '{ref}' a {res_m} m con {version}")
+    return row
+
+
+@app.get("/busqueda/estado")
+def estado_busqueda():
+    """Avance de la cola del trabajador, para mostrar el progreso en el frontend."""
+    with conectar() as conn:
+        celdas = conn.execute("SELECT estado, count(*) AS n FROM celdas_busqueda GROUP BY estado").fetchall()
+        teselas = conn.execute("SELECT count(*) AS n, max(c.actualizado_utc) AS ultima FROM teselas "
+                               "JOIN celdas_busqueda c USING (celda_id)").fetchone()
+        errores = conn.execute("SELECT celda_id, error FROM celdas_busqueda WHERE estado = 'error' LIMIT 20").fetchall()
+    return {"celdas": {c["estado"]: c["n"] for c in celdas}, "teselas": teselas["n"],
+            "ultima_actualizacion": teselas["ultima"], "errores": errores}
+
+
+@app.get("/referencias")
+def listar_referencias(res_m: float = 60, version: str = VERSION_POR_DEFECTO):
+    with conectar() as conn:
+        return conn.execute("SELECT * FROM referencias WHERE res_m = %s AND version_metodo = %s ORDER BY referencia_id",
+                            (res_m, version)).fetchall()
+
+
+@app.get("/analogos/{ref}")
+def analogos(ref: str, res_m: float = 60, version: str = VERSION_POR_DEFECTO,
+             limite: int = Query(100, ge=1, le=2000), minimo_dentro: int = Query(3, ge=0, le=3)):
+    """Teselas terrestres ordenadas por cercanía a la envolvente de la referencia (GeoJSON para el mapa).
+
+    Orden: más variables dentro de [P10, P90] y, a igualdad, menor distancia máxima en anchos de envolvente.
+    """
+    params = {"ref": ref, "res": res_m, "version": version, "min": minimo_dentro, "lim": limite}
+    with conectar() as conn:
+        env = referencia(conn, ref, res_m, version)
+        rows = conn.execute(f"""SELECT *, ST_AsGeoJSON(geom)::json AS geojson FROM ({SQL_DISTANCIAS}) x
+                                WHERE n_dentro >= %(min)s ORDER BY n_dentro DESC, dist_max, celda_id, iy, ix
+                                LIMIT %(lim)s""", params).fetchall()
+        base = conn.execute(f"SELECT count(*) AS total, count(*) FILTER (WHERE n_dentro = 3) AS dentro "
+                            f"FROM ({SQL_DISTANCIAS}) x", params).fetchone()
+    features = []
+    for r in rows:
+        geometry = r.pop("geojson")
+        r.pop("geom")
+        features.append({"type": "Feature", "geometry": geometry, "properties": r})
+    tasa = base["dentro"] / base["total"] if base["total"] else None
+    return {"type": "FeatureCollection", "features": features, "metadata": {
+        "referencia": env, "version_metodo": version, "res_m": res_m, "descargo": DESCARGO,
+        "teselas_procesadas": base["total"], "teselas_3_de_3": base["dentro"], "tasa_base": tasa,
+        "lectura_tasa_base": ("Fracción de todas las teselas procesadas con las 3 variables dentro de la envolvente. "
+                              "Si es alta, coincidir no distingue un lugar de otro."),
+        "limites": LIMITES[env["cuerpo"]]}}
+
+
+@app.get("/coherencia/{ref}")
+def coherencia(ref: str, res_m: float = 60, version: str = VERSION_POR_DEFECTO):
+    """Dónde quedan los sitios terrestres registrados (análogos NASA y controles) frente a todas las teselas.
+
+    percentil = fracción de teselas procesadas que quedan peor ordenadas que la tesela que contiene el sitio.
+    """
+    params = {"ref": ref, "res": res_m, "version": version}
+    with conectar() as conn:
+        referencia(conn, ref, res_m, version)
+        rows = conn.execute(f"""
+            WITH x AS ({SQL_DISTANCIAS})
+            SELECT s.sitio_id, s.fuente_coordenadas, t.celda_id, t.n_dentro, t.dist_max,
+                   (SELECT count(*) FROM x o WHERE o.n_dentro < t.n_dentro
+                        OR (o.n_dentro = t.n_dentro AND o.dist_max > t.dist_max))::float
+                   / (SELECT count(*) FROM x) AS percentil
+            FROM sitios s JOIN x t ON ST_Contains(t.geom, s.geom)
+            WHERE s.cuerpo = 'tierra' ORDER BY s.sitio_id""", params).fetchall()
+    return {"referencia": ref, "res_m": res_m, "version_metodo": version, "sitios": rows,
+            "nota": "Solo aparecen sitios cuya tesela ya fue procesada. Un percentil alto es coherente con la "
+                    "declaración NASA; no es una validación estadística (N pequeño)."}
 
 
 @app.get("/", include_in_schema=False)

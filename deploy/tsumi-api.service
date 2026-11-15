@@ -1,0 +1,16 @@
+# API de lectura. Escucha solo en localhost; el frontend llega por un proxy inverso.
+#   journalctl -u tsumi-api -f -o cat | jq 'select(.evento == "peticion")'
+[Unit]
+Description=tsumi: API de lectura
+After=network-online.target postgresql.service
+
+[Service]
+User=aldo
+WorkingDirectory=/home/aldo/tsumi_nasa_SA
+EnvironmentFile=/home/aldo/tsumi_nasa_SA/secretos/.env
+ExecStart=/home/aldo/tsumi_nasa_SA/.venv/bin/uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

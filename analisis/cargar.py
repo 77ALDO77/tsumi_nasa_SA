@@ -36,6 +36,11 @@ def producto(url):
     raise ValueError(f"Fuente sin producto registrado: {host}")
 
 
+def aplicar_migraciones(cur):
+    for sql in sorted(MIGRACIONES.glob("*.sql")):
+        cur.execute(sql.read_text(encoding="utf-8"))
+
+
 def una(cur, sql, params):
     cur.execute(sql, params)
     return cur.fetchone()
@@ -46,8 +51,7 @@ def cargar(conn, carpeta: Path):
     run_id = carpeta.name
     version = manifest.get("version_metodo", VERSION_METODO)
     with conn.transaction(), conn.cursor() as cur:
-        for sql in sorted(MIGRACIONES.glob("*.sql")):
-            cur.execute(sql.read_text(encoding="utf-8"))
+        aplicar_migraciones(cur)
         params = {k: manifest[k] for k in ("lado_m", "remuestreo", "proyeccion_calculo", "limites") }
         params["escalas_m"] = manifest.get("escalas_m") or [manifest["res_m"]]  # manifiestos v1 tenían res_m
         params["version_metodo"] = version
