@@ -37,3 +37,12 @@ curl -s 127.0.0.1:8000/busqueda/estado | jq      # avance de la cola
 | `peticion` / `peticion_fallida` / `base_no_disponible` | api | `metodo`, `ruta`, `estado`, `duracion_ms` |
 
 Para añadir zonas de búsqueda, edita `zonas` en `analisis/inputs/busqueda.json` y vuelve a ejecutar `encolar`. El trabajador las toma por prioridad sin reiniciarse. Los logs nunca incluyen `DATABASE_URL`.
+
+## Capacidad del servidor
+
+El servidor tiene 2 vCPU, 7,7 GB de RAM y unos 91 GB libres, y lo comparte con otro proyecto.
+
+- **Por celda**, el trabajador espera la red unos 60–85 s, usa unos 5 s de CPU y unos 300 MB de RAM en el pico.
+- **Para ir más rápido** se puede lanzar un segundo trabajador, porque la cola reparte las celdas con `SKIP LOCKED`.
+- **Almacenamiento:** cada celda ocupa del orden de 1 MB en `teselas` (dos escalas, sin píxeles). Es una estimación sin medir.
+- **Cortes de red:** una conexión estancada corta en unos 30 s y la celda vuelve a la cola, con un máximo de 3 intentos. Se ve como `celda_fallida` en los logs.

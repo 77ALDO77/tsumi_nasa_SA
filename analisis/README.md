@@ -64,4 +64,6 @@ Primera ejecución local, 2026-11-15, con las celdas N35W111, N35W112 y N43W103:
 - **Tasa base:** de 0 % a 2,1 % de teselas con 3/3.
 - **P2 se cumple:** el control N43W103 tiene 0 %, frente a un 0,2–2,1 % en Arizona.
 - **P1 se cumple a medias:** SP Crater queda en el percentil 0,85–0,98, pero Cinder Lake en el 0,19–0,31. El punto GNIS de Cinder Lake es de clase *Flat* (el fondo del lago), no el campo de cráteres. No se corrigió después de ver el resultado.
-- **Tiempo por celda:** una celda tardó 59 s, casi todo en lectura de red, y otras dos unos 10 min. Los logs `fuente_leida` registran la apertura y la lectura de cada tesela para medirlo en el servidor.
+- **Tiempo por celda:** de 60 a 85 s, casi todo lectura de red (CPU ~5 s).
+- **Causa de las demoras de ~10 min (hallada con los logs `fuente_leida`).** Una sola petición HTTP estancada: la tesela `N36_W112` tardó 271 s en abrirse y 197 s en leerse, y en la celda siguiente 5 s.
+- **Corrección en `fuentes.py`.** Límites de GDAL: conexión 15 s, corte si baja de 10 KB/s durante 30 s, 3 reintentos. Solo un `404` se trata como tesela inexistente (océano); cualquier otro error hace fallar la celda, que vuelve a la cola. Comprobado con una conexión estancada simulada, que corta en 3 s.

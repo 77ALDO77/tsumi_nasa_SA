@@ -20,6 +20,13 @@ os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
 os.environ.setdefault("CPL_VSIL_CURL_CHUNK_SIZE", "10485760")
 os.environ.setdefault("GDAL_HTTP_MERGE_CONSECUTIVE_RANGES", "YES")
 os.environ.setdefault("GDAL_HTTP_MULTIPLEX", "YES")
+# Sin límites, una conexión estancada bloqueó una celda 7,8 min (apertura 271 s + lectura 197 s, medido en logs).
+# Se corta si no conecta en 15 s o si baja de 10 KB/s durante 30 s, y GDAL reintenta 3 veces.
+os.environ.setdefault("GDAL_HTTP_CONNECTTIMEOUT", "15")
+os.environ.setdefault("GDAL_HTTP_LOW_SPEED_LIMIT", "10240")
+os.environ.setdefault("GDAL_HTTP_LOW_SPEED_TIME", "30")
+os.environ.setdefault("GDAL_HTTP_MAX_RETRY", "3")
+os.environ.setdefault("GDAL_HTTP_RETRY_DELAY", "5")
 
 LOLA_POLAR = ("https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/"
               "data/lola_gdr/polar/float_img/ldem_80s_40m_float.lbl")
@@ -36,6 +43,11 @@ CUERPOS = {
              "crs_fuente": CRS.from_proj4(f"+proj=stere +lat_0=-90 +lon_0=0 +k=1 +x_0=0 +y_0=0 +R={R_LUNA:.0f} +units=m +no_defs")},
     "tierra": {"datum": "+ellps=WGS84", "factor_altura_m": 1.0, "crs_fuente": None},
 }
+
+
+def tesela_inexistente(exc: Exception) -> bool:
+    """Solo un 404 significa que no hay tesela (GLO-30 no publica océano); otro error es un fallo de red."""
+    return "HTTP response code: 404" in str(exc)
 
 
 def teselas_glo30(lat, lon, lado_m):
@@ -85,6 +97,8 @@ def ventana(cuerpo, lat, lon, lado_m, resoluciones, alto_m=None):
         try:
             ds = rasterio.open(f"/vsicurl/{url}")
         except RasterioIOError as exc:
+            if not tesela_inexistente(exc):
+                raise  # corte de red: la celda falla y vuelve a la cola, no se guarda un hueco como si fuera océano
             procedencia.append({"url": url, "estado": "sin_tesela", "error": str(exc)[:200],
                                 "duracion_s": round(time.monotonic() - inicio, 2)})
             continue
