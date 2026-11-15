@@ -268,6 +268,17 @@ def test_cambridge_and_github_ignore_site_navigation():
         assert not any('Breadcrumb' in s['texto'] or 'Navigation' in s['texto'] for s in doc['segmentos'])
 
 
+def test_analog_explorer_image_details_are_segments():
+    html = b'''<main><h2>Basalt Landscapes: Kilauea and the Moon</h2><div class="image-details-panel">
+    <button><span>Image Details</span></button><div class="image-details-wrapper">
+    On the slopes of Kilauea, researchers characterize their surroundings.</div></div><div class="other">Ignored layout text</div></main>'''
+    doc = extract_html(html, 'https://science.nasa.gov/solar-system/analog-explorer/')
+    details = [s for s in doc['segmentos'] if 'slopes of Kilauea' in s['texto']]
+    assert len(details) == 1
+    assert details[0]['seccion'] == 'Basalt Landscapes: Kilauea and the Moon'
+    assert not any('Ignored layout' in s['texto'] for s in doc['segmentos'])
+
+
 def test_sampling_keeps_site_evidence_inside_document():
     segments = [{"texto": f"Dust observation number {i}", "pagina": i, "localizador": f"page {i}", "seccion": None}
                 for i in range(1, 101)]

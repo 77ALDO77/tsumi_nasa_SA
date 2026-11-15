@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 scrapping/data/
 scrapping/certs/
+secretos/
+.env
+analisis/data/
+

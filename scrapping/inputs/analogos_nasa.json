@@ -1,0 +1,41 @@
+{
+  "consulta": "2026-11-15",
+  "metodo": "Artículos NASA enlazados desde Planetary Analog Explorer y la página de misiones análogas. Se buscan pares análogo terrestre → cuerpo planetario y la dimensión que NASA declara. Los campos de abajo son contexto previo no validado; la etiqueta solo vale tras revisión humana del literal extraído.",
+  "inventario": [
+    {
+      "fuente": "NASA Analog Missions",
+      "url": "https://www.nasa.gov/analog-missions/",
+      "estado": "pendiente",
+      "hallazgo": "Lista de análogos de NASA; la mayoría son hábitats o aislamiento, no terreno."
+    }
+  ],
+  "antecedentes": [
+    {
+      "lugar": "San Francisco Volcanic Field, Arizona",
+      "referencia": "Polo sur lunar",
+      "variables": ["terreno", "regolito", "operaciones EVA"],
+      "medicion": null,
+      "localizador": "pendiente",
+      "url": "https://science.nasa.gov/missions/artemis/behind-the-scenes-of-a-nasa-moonwalk-in-the-arizona-desert/",
+      "limite": "Noticia sobre un ensayo operativo; no publica métricas de relieve."
+    },
+    {
+      "lugar": "Islandia",
+      "referencia": "Luna",
+      "variables": ["terreno", "observación de rasgos superficiales"],
+      "medicion": null,
+      "localizador": "pendiente",
+      "url": "https://science.nasa.gov/missions/artemis/nasas-artemis-ii-crew-uses-iceland-terrain-for-lunar-training/",
+      "limite": "Entrenamiento de observación para una misión orbital; no es un ensayo de superficie."
+    },
+    {
+      "lugar": "Valley of Ten Thousand Smokes, Alaska",
+      "referencia": "pendiente",
+      "variables": ["pendiente"],
+      "medicion": null,
+      "localizador": "pendiente",
+      "url": "https://science.nasa.gov/solar-system/into-the-field-with-nasa-valley-of-ten-thousand-smokes/",
+      "limite": "Sin leer."
+    }
+  ]
+}

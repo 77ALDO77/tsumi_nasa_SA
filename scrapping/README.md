@@ -4,7 +4,14 @@ Código, pruebas, dependencias, inventario, resultados y análisis están en est
 
 **Última revisión: 17 fuentes; 11 con texto, 6 con limitaciones; 27 pasajes candidatos y 293 enlaces.** [Diagnóstico y análisis científico](docs/ANALISIS_RESULTADOS.md) · [Auditoría JSON](docs/analisis_fuentes.json) · [Tabla CSV](docs/analisis_fuentes.csv).
 
-Validación: 24 pruebas aprobadas, dependencias compatibles y reproducción idéntica de documentos, pasajes y cobertura desde esta ubicación.
+Validación: 30 pruebas aprobadas, dependencias compatibles y reproducción idéntica de documentos, pasajes y cobertura desde esta ubicación.
+
+**Etiquetas de análogos NASA (2026-11-15).** [inputs/analogos_nasa.json](inputs/analogos_nasa.json) añade los artículos de campo de NASA enlazados desde Analog Explorer. Las 6 fuentes se extrajeron en `scrapping/data/analogos-nasa`. Después se reprocesaron sin red en `analogos-nasa-revisado`, una vez que el extractor ya recogía los paneles «Image Details» de Analog Explorer. [inputs/etiquetas_analogos.json](inputs/etiquetas_analogos.json) define 22 etiquetas, que se pueden revisar a mano: sitio, cuerpo, dimensión (vocabulario cerrado), relación, expectativa del equipo y medibilidad con el analizador de relieve. `python -m scrapping.tools.prepare_analog_labels` comprueba el literal y el SHA256 de cada una y escribe [docs/etiquetas_analogos.json](docs/etiquetas_analogos.json). La revisión humana se anota en la entrada (`revision_humana`, `revisor`, `fecha_revision`) y la herramienta la conserva; hoy las 22 están pendientes.
+
+```powershell
+python -m scrapping --inventory scrapping/inputs/analogos_nasa.json --source "San Francisco Volcanic Field, Arizona" --source "Islandia" --source "Valley of Ten Thousand Smokes, Alaska" --source "NASA Analog Missions" --source "NASA Analog Explorer" --source "Caso NASA JETT3" --output scrapping/data/<carpeta-nueva>
+python -m scrapping.tools.prepare_analog_labels
+```
 
 [Segunda pasada consolidada y preparación del MVP 0](docs/SEGUNDA_PASADA.md): usa la descarga reciente y recupera Mojave desde su copia completa anterior. Incluye cinco registros documentales con trazabilidad y revisión humana pendiente.
 

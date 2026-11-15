@@ -66,7 +66,8 @@ def extract_html(body: bytes, url: str, encoding="utf-8") -> dict:
     segments = []
     section = None
     # XPath conservado sobre el árbol original, sin mutarlo ni perder localizadores.
-    nodes = root.xpath(".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::p or self::li or self::tr or self::pre or self::dt or self::dd][not(ancestor::nav or ancestor::footer or ancestor::header or ancestor::script or ancestor::style)]")
+    # Analog Explorer guarda la descripción de cada par en un div sin <p>.
+    nodes = root.xpath(".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::p or self::li or self::tr or self::pre or self::dt or self::dd or self::div[contains(concat(' ', normalize-space(@class), ' '), ' image-details-wrapper ')]][not(ancestor::nav or ancestor::footer or ancestor::header or ancestor::script or ancestor::style)]")
     if host == "www.gportal.jaxa.jp":
         nodes = root.css("#left_menus a, #contents a")
     for node in nodes:
