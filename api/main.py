@@ -36,7 +36,11 @@ LIMITES = {
              "Temperatura y regolito: no se comparan en este perfil de relieve."],
     "marte": ["Gravedad: ~0,38 de la terrestre.",
               "Atmósfera tenue de CO2: presión y viento distintos.",
-              "Temperatura y regolito: no se comparan en este perfil de relieve."],
+              "Temperatura y regolito: no se comparan en este perfil de relieve.",
+              "Banda P25–P75, más estrecha que la lunar (P10–P90): con P10–P90 las regiones marcianas coincidían "
+              "con gran parte de los desiertos terrestres.",
+              "DEM regionales (CTX a 20 m; HiRISE + CTX leído a 16 m) frente a GLO-30 (30 m): resoluciones y errores "
+              "distintos, comparados tras promediar a la misma malla de 60 m."],
 }
 
 app = FastAPI(title="Análogos terrestres: API de lectura", version="0.1.0")
@@ -180,14 +184,19 @@ def estado_busqueda():
         candidatos = conn.execute("""SELECT count(*) AS n FROM (
                                      SELECT DISTINCT celda_id,ix,iy FROM candidatos
                                      WHERE res_m=60 AND version_metodo=%s) c""", (VERSION_POR_DEFECTO,)).fetchone()
-        zonas = conn.execute("""SELECT count(*) FILTER (WHERE es_zona) AS zonas, count(*) FILTER (WHERE NOT es_zona) AS aisladas,
-                                count(*) FILTER (WHERE es_zona AND NOT conocida) AS nuevas
-                                FROM zonas_candidatas WHERE res_m=60 AND version_metodo=%s""", (VERSION_POR_DEFECTO,)).fetchone()
+        por_cuerpo = conn.execute("""SELECT cuerpo, count(*) FILTER (WHERE es_zona) AS zonas,
+                                     count(*) FILTER (WHERE NOT es_zona) AS aisladas,
+                                     count(*) FILTER (WHERE es_zona AND NOT conocida) AS nuevas
+                                     FROM zonas_candidatas WHERE res_m=60 AND version_metodo=%s GROUP BY cuerpo""",
+                                  (VERSION_POR_DEFECTO,)).fetchall()
+        zonas = {k: sum(z[k] for z in por_cuerpo) for k in ("zonas", "aisladas", "nuevas")}
     return {"celdas": {c["estado"]: c["n"] for c in celdas}, "teselas": teselas["n"],
             "ultima_actualizacion": teselas["ultima"], "errores": errores,
             "trabajadores": trabajadores, "contexto_nasa": contexto, "teselas_candidatas": candidatos["n"],
             "zonas_candidatas": zonas["zonas"], "zonas_lejos_de_analogos_conocidos": zonas["nuevas"],
-            "candidatas_aisladas": zonas["aisladas"]}
+            "candidatas_aisladas": zonas["aisladas"],
+            "zonas_por_cuerpo": {z["cuerpo"]: {"zonas": z["zonas"], "lejos_de_analogos_conocidos": z["nuevas"],
+                                               "aisladas": z["aisladas"]} for z in por_cuerpo}}
 
 
 @app.get("/referencias")

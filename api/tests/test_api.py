@@ -168,10 +168,10 @@ def test_frontend_contract(monkeypatch):
 
     sites = {s["id"]: s for s in client.get("/api/sites").json()}
     assert sites["TIE-C"] == {"id": "TIE-C", "name": "Sitio TIE-C", "lat": 30.05, "lon": 30.05,
-                              "coverage": "Análogo NASA documentado"}
+                              "coverage": "Análogo NASA documentado", "location": None}
     candidate = sites["T~N30E030~0~0"]
     assert candidate["coverage"].startswith("Candidato aislado · 3/3 frente a Región C")
-    assert set(candidate) == {"id", "name", "lat", "lon", "coverage", "zone"} and candidate["zone"]["tiles"] == 1
+    assert set(candidate) == {"id", "name", "lat", "lon", "coverage", "location", "zone"} and candidate["zone"]["tiles"] == 1
 
     comps = client.get("/api/sites/TIE-C/comparisons").json()
     comp = next(c for c in comps if c["id"] == "LUN-C~relieve")
@@ -319,7 +319,129 @@ def test_zones_group_nearby_candidates_and_flag_known_sites(monkeypatch):
         trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .3, "agrupacion": {"min_teselas": 4}}, "N40E040")
         assert conn.execute("SELECT count(*) FROM zonas_candidatas WHERE version_metodo = %s AND es_zona",
                             (version,)).fetchone()[0] == 0
+        # Si la referencia que une la tesela del medio es marciana, la zona no mezcla cuerpos:
+        # las lunares (a 6,01 km entre sí) quedan sueltas y la marciana forma su propia zona.
+        conn.execute("UPDATE referencias SET cuerpo = 'marte' WHERE referencia_id = 'LUN-Z2' AND version_metodo = %s",
+                     (version,))
+        trabajador.zonas(conn, {})
+        assert conn.execute("""SELECT cuerpo, zona_id, n_teselas FROM zonas_candidatas WHERE version_metodo = %s
+                               ORDER BY cuerpo, zona_id""", (version,)).fetchall() == [
+            ("luna", "N40E040~0~0", 1), ("luna", "N40E040~2~0", 1), ("luna", "N40E040~3~0", 1), ("marte", "N40E040~1~0", 1)]
         conn.rollback()
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_mars_references_use_central_band_and_can_stay_out_of_search(monkeypatch):
+    from fastapi.testclient import TestClient
+    from psycopg.types.json import Jsonb
+
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+    from api import contrato
+    from api.main import app
+
+    version = "prueba-marte"
+    q = lambda a, b, c, d, e: {"p10": a, "p25": b, "p50": c, "p75": d, "p90": e}
+    env = {"pendiente_mediana_grados": q(1, 4, 5, 6, 9), "pendiente_p90_grados": q(2, 8, 10, 12, 18),
+           "relieve_p95_p5_m": q(10, 40, 50, 60, 90)}
+    fuente = {"title": "DEM marciano de prueba", "url": "https://astrogeology.usgs.gov/prueba"}
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: {"contexto_id": "marte-test"})
+    monkeypatch.setattr(contrato, "VERSION_POR_DEFECTO", version)
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+            aplicar_migraciones(cur)  # 004 y 007 se reejecutan sin chocar en la vista
+        conn.execute("DELETE FROM teselas WHERE version_metodo = %s", (version,))
+        conn.execute("DELETE FROM referencias WHERE version_metodo = %s", (version,))
+        for ref, buscar in (("MAR-BUSCA", True), ("MAR-SOLO-COMPARA", False)):
+            conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
+                            fuente_coordenadas, n_subventanas, envolvente, nombre, banda, buscar, fuente)
+                            VALUES (%s,'marte',-4.75,137.4,15000,3000,60,%s,'prueba',25,%s,%s,'p25-p75',%s,%s)""",
+                         (ref, version, Jsonb(env), "Región " + ref, buscar, Jsonb(fuente)))
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona)
+                        VALUES ('N41E041',41,41,'marte') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES ('marte-test',%s,0.3)
+                        ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                        metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""",
+                     (Jsonb({"meses": ["2025-01", "2025-07"], "fuentes": []}),))
+        # ix 0 dentro de P25–P75; ix 1 dentro de P10–P90 pero fuera de la banda central.
+        for ix, lon, med in ((0, 41.0, 5), (1, 41.5, 2)):
+            conn.execute("""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                            pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida, ndvi_max, ndvi_n, contexto_id)
+                            VALUES ('N41E041',60,%s,%s,0,41,%s,ST_MakeEnvelope(%s,40.99,%s,41.01,4326),
+                            %s,10,50,1,1,.1,2,'marte-test')""", (version, ix, lon, lon - .01, lon + .01, med))
+        assert trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .3}, "N41E041") == 1
+        assert conn.execute("SELECT referencia_id, ix FROM candidatos WHERE version_metodo = %s",
+                            (version,)).fetchall() == [("MAR-BUSCA", 0)]
+        conn.commit()
+    client = TestClient(app)
+    zona = next(s for s in client.get("/api/sites").json() if s["id"] == "T~N41E041~0~0~marte")
+    assert client.get("/api/sites/T~N41E041~0~0~marte/comparisons").status_code == 200
+    assert zona["zone"]["bodies"] == ["marte"] and "(Marte)" in zona["coverage"]
+    refs = {c["reference"] for c in client.get("/api/sites/T~N41E041~1~0/comparisons").json()}
+    assert {"Marte · Región MAR-BUSCA", "Marte · Región MAR-SOLO-COMPARA"} <= refs
+    res = client.post("/api/analyses", json={"siteId": "T~N41E041~1~0",
+                                            "comparisonId": "MAR-SOLO-COMPARA~pendiente_mediana"}).json()["result"]
+    assert "va de 4,0° a 6,0° (P25–P75)" in res["limitation"] and "queda fuera" in res["limitation"]
+    assert "no se usa para seleccionar candidatas" in res["limitation"] and "Gravedad: ~0,38" in res["limitation"]
+    assert fuente in res["sources"] and "Marte, DEM marciano de prueba" in res["scale"]
+    assert not any("lola" in s["url"] for s in res["sources"])
+    with psycopg.connect(DSN) as conn:  # no dejar datos de prueba que cambien otras pruebas
+        conn.execute("DELETE FROM teselas WHERE version_metodo = %s", (version,))
+        conn.execute("DELETE FROM referencias WHERE version_metodo = %s", (version,))
+        trabajador.zonas(conn, {})
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_locations_are_cached_once_and_exposed_without_inventing_names(monkeypatch):
+    import httpx
+    from fastapi.testclient import TestClient
+
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+    from api.main import app
+
+    llamadas = []
+
+    class Respuesta:
+        def __init__(self, data): self.data = data
+        def raise_for_status(self): pass
+        def json(self): return self.data
+
+    def falso(url, params, headers, timeout):
+        llamadas.append((params["lat"], params["lon"], headers["User-Agent"]))
+        if params["lat"] == "10.50":
+            return Respuesta({"address": {"country": "Chile", "state": "Región de Antofagasta", "county": "Provincia de El Loa"}})
+        if params["lat"] == "11.50":
+            return Respuesta({"error": "Unable to geocode"})  # mar abierto
+        raise httpx.ConnectError("sin red")
+
+    monkeypatch.setattr(trabajador.httpx, "get", falso)
+    monkeypatch.setattr(trabajador.time, "sleep", lambda s: None)
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    cfg = {"ubicacion": {"servicio": "https://nominatim.example/reverse", "agente": "TZUMY-prueba"}}
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        for sid, lat in (("TIE-UBICA-TIERRA", 10.5), ("TIE-UBICA-MAR", 11.5)):
+            conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, rol)
+                            VALUES (%s,'tierra',%s,20.25,'prueba',ST_SetSRID(ST_MakePoint(20.25,%s),4326),'analogo_nasa')
+                            ON CONFLICT DO NOTHING""", (sid, lat, lat))
+        conn.execute("DELETE FROM ubicaciones")
+        conn.commit()
+        n = trabajador.ubicar(conn, cfg, 100)
+        assert n == len(llamadas) and ("10.50", "20.25", "TZUMY-prueba") in llamadas
+        assert trabajador.ubicar(conn, cfg, 100) == 0  # en caché: no se vuelve a consultar
+        estados = dict(conn.execute("SELECT lat::text, estado FROM ubicaciones WHERE lon = 20.25").fetchall())
+        assert estados == {"10.50": "ok", "11.50": "sin_resultado"}
+        assert trabajador.ubicar(conn, {}, 100) == 0  # sin configuración no se llama a ningún servicio
+    sites = {s["id"]: s for s in TestClient(app).get("/api/sites").json()}
+    assert sites["TIE-UBICA-TIERRA"]["location"] == {"status": "ok", "country": "Chile", "province": "Región de Antofagasta",
+                                                     "district": "Provincia de El Loa", "source": "© OpenStreetMap (Nominatim)"}
+    assert sites["TIE-UBICA-MAR"]["location"]["status"] == "sin_resultado"
+    with psycopg.connect(DSN) as conn:
+        conn.execute("DELETE FROM sitios WHERE sitio_id LIKE 'TIE-UBICA-%'")
 
 
 @pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
@@ -486,7 +608,7 @@ def test_catalog_metadata_and_live_status_without_recomputing_terrain(monkeypatc
         assert state.status_code == 200
         worker = next(w for w in state.json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")
         assert worker["senal_reciente"] and worker["estado"] == "procesando" and worker["celdas_elegibles"] == 100
-        assert {"zonas_candidatas", "zonas_lejos_de_analogos_conocidos", "candidatas_aisladas"} <= set(state.json())
+        assert {"zonas_candidatas", "zonas_lejos_de_analogos_conocidos", "candidatas_aisladas", "zonas_por_cuerpo"} <= set(state.json())
         conn.execute("UPDATE trabajadores SET actualizado_utc=now()-interval '10 minutes' WHERE trabajador_id='worker-prueba'")
         conn.commit()
         worker = next(w for w in client.get("/api/search/status").json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")

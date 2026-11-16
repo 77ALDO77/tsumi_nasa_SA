@@ -35,6 +35,7 @@ LOLA_CONTEO = ("https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol
                "data/lola_gdr/polar/img/ldec_80s_40m.lbl")
 GLO30 = "https://copernicus-dem-30m.s3.amazonaws.com/{n}/{n}.tif"
 R_LUNA = 1737400.0
+R_MARTE = 3396190.0  # esfera de los DEM USGS de Marte (CTX/HiRISE en eqc); alturas en m sobre el areoide MOLA
 
 CUERPOS = {
     # La etiqueta LOLA declara alturas en km sobre una esfera de 1737,4 km; el CRS se fija aquí
@@ -42,6 +43,8 @@ CUERPOS = {
     "luna": {"datum": f"+R={R_LUNA:.0f}", "factor_altura_m": 1000.0,
              "crs_fuente": CRS.from_proj4(f"+proj=stere +lat_0=-90 +lon_0=0 +k=1 +x_0=0 +y_0=0 +R={R_LUNA:.0f} +units=m +no_defs")},
     "tierra": {"datum": "+ellps=WGS84", "factor_altura_m": 1.0, "crs_fuente": None},
+    # Marte no tiene un DEM global fino: cada referencia declara su producto regional (`dem`) y se usa su CRS.
+    "marte": {"datum": f"+R={R_MARTE:.0f}", "factor_altura_m": 1.0, "crs_fuente": None},
 }
 
 
@@ -60,7 +63,11 @@ def teselas_glo30(lat, lon, lado_m):
             yield GLO30.format(n=name)
 
 
-def urls(cuerpo, lat, lon, lado_m):
+def urls(cuerpo, lat, lon, lado_m, dem=None):
+    if cuerpo == "marte":
+        if not dem:
+            raise ValueError("Una referencia marciana necesita su DEM regional (campo 'dem')")
+        return [dem]
     if cuerpo == "luna":
         if lat > -80:
             raise ValueError("El mosaico LOLA polar ldem_80s_40m solo cubre de 80° S al polo")
@@ -76,10 +83,19 @@ def mascara_lola(win, transform):
         return ds.read(1, window=win)
 
 
-def ventana(cuerpo, lat, lon, lado_m, resoluciones, alto_m=None):
+def abrir(url, nivel_reducido=None):
+    if nivel_reducido is None:
+        return rasterio.open(f"/vsicurl/{url}")
+    # Las versiones reducidas del DEM de Gale viven en un .ovr aparte: solo aquí se permite buscarlo.
+    with rasterio.Env(GDAL_DISABLE_READDIR_ON_OPEN="NO"):
+        return rasterio.open(f"/vsicurl/{url}", overview_level=nivel_reducido)
+
+
+def ventana(cuerpo, lat, lon, lado_m, resoluciones, alto_m=None, dem=None, nivel_reducido=None):
     """Lee cada fuente una vez y la reproyecta a cada resolución.
 
     La caja mide `lado_m` de ancho y `alto_m` (por defecto igual) de alto, centrada en (lat, lon).
+    `dem` y `nivel_reducido` solo se usan en Marte (DEM regional y, si es muy fino, una versión reducida).
     Devuelve ({res: alturas en m float32 con NaN}, {res: transform}, crs, procedencia por fuente).
     """
     alto_m = alto_m or lado_m
@@ -92,10 +108,10 @@ def ventana(cuerpo, lat, lon, lado_m, resoluciones, alto_m=None):
         grids[res] = np.full((ny, nx), np.nan, dtype="float32")
     half = max(lado_m, alto_m) / 2
     procedencia = []
-    for url in urls(cuerpo, lat, lon, max(lado_m, alto_m)):
+    for url in urls(cuerpo, lat, lon, max(lado_m, alto_m), dem):
         inicio = time.monotonic()
         try:
-            ds = rasterio.open(f"/vsicurl/{url}")
+            ds = abrir(url, nivel_reducido)
         except RasterioIOError as exc:
             if not tesela_inexistente(exc):
                 raise  # corte de red: la celda falla y vuelve a la cola, no se guarda un hueco como si fuera océano

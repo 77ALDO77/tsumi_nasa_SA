@@ -1,6 +1,6 @@
 {
-  "version": "busqueda-3",
-  "proposito": "Búsqueda continua de teselas terrestres cuyo relieve cae dentro de la envolvente P10–P90 de una región lunar. Es preselección por relieve, no certificación de analogía.",
+  "version": "busqueda-4",
+  "proposito": "Búsqueda continua de teselas terrestres cuyo relieve cae dentro de la envolvente de una región lunar (P10–P90) o marciana (P25–P75). Es preselección por relieve, no certificación de analogía.",
   "tesela_m": 3000,
   "escalas_m": [
     60,
@@ -14,6 +14,13 @@
     "min_teselas": 3,
     "sitio_conocido_km": 50,
     "nota": "Zonas por distancia entre centros de candidatas a la misma resolución, encadenando vecinas. Elegido con 590 candidatas reales: vecina típica a 3–4,25 km; con 10 km se formaban franjas de 75 km. Menos de 3 teselas = candidata aislada. 'Conocida' = alguna tesela a <= 50 km de un análogo NASA registrado."
+  },
+  "ubicacion": {
+    "servicio": "https://nominatim.openstreetmap.org/reverse",
+    "agente": "TZUMY-atlas/1.0 (NASA Space Apps Challenge 2026)",
+    "por_celda": 2,
+    "en_espera": 20,
+    "nota": "País, provincia y distrito para el atlas (© OpenStreetMap, ODbL). Política de Nominatim: agente propio, máximo 1 consulta/s y caché; aquí ~2 consultas por celda de ~15 s."
   },
   "auto_encolar": {
     "lote": 24,
@@ -44,8 +51,50 @@
       "lado_m": 15000,
       "fuente_coordenadas": "Centro aproximado de terceros; región Artemis nombrada por NASA en oct. 2024; regiones de ~15×15 km (atlas del polo sur, LPI)",
       "nombre": "Mons Mouton Plateau"
+    },
+    {
+      "id": "MAR-GALE-MONTE-SHARP",
+      "cuerpo": "marte",
+      "lat": -4.75,
+      "lon": 137.4,
+      "lado_m": 15000,
+      "fuente_coordenadas": "Punto elegido por el equipo en la base norte del monte Sharp (Aeolis Mons), zona que recorre Curiosity; no es un sitio designado por NASA",
+      "nombre": "Gale · base del monte Sharp",
+      "dem": "https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif",
+      "dem_nivel_reducido": 2,
+      "fuente": {"title": "MSL Gale Merged DEM 1 m v3 (USGS Astrogeology; HiRISE + CTX), leído a 16 m", "url": "https://astrogeology.usgs.gov/search/map/mars_msl_gale_merged_dem_1m"},
+      "banda": "p25-p75",
+      "buscar": true
+    },
+    {
+      "id": "MAR-GALE-BRADBURY",
+      "cuerpo": "marte",
+      "lat": -4.5895,
+      "lon": 137.4417,
+      "lado_m": 15000,
+      "fuente_coordenadas": "Bradbury Landing, aterrizaje de Curiosity: 4,5895° S, 137,4417° E (Vasavada et al. 2014, JGR Planets)",
+      "nombre": "Gale · aterrizaje de Curiosity",
+      "dem": "https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif",
+      "dem_nivel_reducido": 2,
+      "fuente": {"title": "MSL Gale Merged DEM 1 m v3 (USGS Astrogeology; HiRISE + CTX), leído a 16 m", "url": "https://astrogeology.usgs.gov/search/map/mars_msl_gale_merged_dem_1m"},
+      "banda": "p25-p75",
+      "buscar": false
+    },
+    {
+      "id": "MAR-JEZERO",
+      "cuerpo": "marte",
+      "lat": 18.4447,
+      "lon": 77.4508,
+      "lado_m": 15000,
+      "fuente_coordenadas": "Octavia E. Butler Landing, aterrizaje de Perseverance (NASA/JPL): 18,4447° N, 77,4508° E",
+      "nombre": "Jezero · aterrizaje de Perseverance y delta",
+      "dem": "https://planetarymaps.usgs.gov/mosaic/mars2020_trn/CTX/ScienceInvestigationMaps_JPL/M20_JezeroCrater_CTXDEM_20m.tif",
+      "fuente": {"title": "Mars 2020 Science Investigation CTX DEM Mosaic, 20 m (USGS Astrogeology)", "url": "https://astrogeology.usgs.gov/search/map/mars_2020_science_investigation_ctx_dem_mosaic"},
+      "banda": "p25-p75",
+      "buscar": false
     }
   ],
+  "nota_marte": "Marte usa la banda P25–P75 y la Luna P10–P90. Medido el 16/11/2026 con 204.239 teselas terrestres que pasan NDVI: con P10–P90, Jezero y Bradbury aceptaban el 20–36 % y el monte Sharp el 12 % (Luna: 179 y 1.041 teselas). Con P25–P75, el monte Sharp acepta 804 y Jezero/Bradbury 17.718–30.667. Jezero y Bradbury son llanuras suaves comunes en la Tierra: sirven para comparar sitios concretos, no para seleccionar candidatas (buscar=false).",
   "zonas": [
     {
       "nombre": "Análogos NASA: San Francisco Volcanic Field (JETT, D-RATS)",

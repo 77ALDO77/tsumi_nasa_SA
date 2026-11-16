@@ -92,6 +92,24 @@ Los reemplazos del ranking se serializan entre trabajadores, y eliminan candidat
 La migración no recalcula el terreno ni modifica las celdas ya procesadas. No se debe
 confundir contexto global MODIS con cobertura global de relieve.
 
+### Zonas por cuerpo y ubicación administrativa (migraciones 008 y 009)
+
+008 separa las zonas por cuerpo: antes, teselas lunares y marcianas cercanas formaban zonas mixtas.
+Vacía la tabla derivada; el trabajador la rellena al terminar la siguiente celda.
+
+009 crea `ubicaciones`: país, provincia y distrito por coordenada redondeada a 0,01°, consultados por
+el trabajador en OpenStreetMap/Nominatim (`ubicacion` en `busqueda.json`): 2 consultas por celda y 20
+cuando la cola está vacía, con agente propio, ≤1 consulta/s y caché permanente (política de Nominatim).
+Los errores de red se reintentan al día siguiente. La API solo lee la caché y cita © OpenStreetMap.
+
+### Referencias marcianas (migración 007)
+
+Añade a `referencias` la banda (`p10-p90` o `p25-p75`), `buscar` y la fuente del DEM, y adapta la
+vista de comparación sin cambiar sus columnas. Tras desplegar, ejecutar `referencias` con el mismo
+comando del trabajador: lee LOLA y los DEM de Marte de USGS (unos minutos) y reconstruye
+candidatos y zonas. El terreno terrestre no se recalcula. El DEM de Gale se lee desde su `.ovr`
+externo: solo para esa apertura se permite a GDAL listar el directorio remoto.
+
 ### Zonas de candidatas (migración 006)
 
 La tabla `zonas_candidatas` se llena sola al terminar la siguiente celda: no hace falta

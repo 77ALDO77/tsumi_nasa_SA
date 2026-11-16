@@ -14,7 +14,7 @@ Cada ventana se lee por HTTP con lecturas parciales (GDAL `/vsicurl/`), sin desc
 
 ```bash
 uv pip install -r analisis/requirements.txt        # numpy, rasterio/GDAL, psycopg, httpx, pyhdf/HDF4
-python -m pytest -q analisis/tests                 # 25 pruebas sin red
+python -m pytest -q analisis/tests                 # 26 pruebas sin red
 python -m analisis analisis/inputs/mvp0.json --salida analisis/data/<carpeta-nueva> [--solo LUN-SHACKLETON]
 ```
 
@@ -23,6 +23,19 @@ La salida queda en `analisis/data/`, que está excluida de Git:
 - `metricas.csv`;
 - `ventanas/<id>.tif`: alturas en m a la resolución común;
 - `ventanas/<id>.png`: sombreado con iluminación artificial, solo para inspección.
+
+## Referencias marcianas
+
+No hay un DEM global fino de Marte (MOLA tiene 463 m), así que cada referencia marciana declara
+su producto regional en `inputs/busqueda.json` (`dem`, y `dem_nivel_reducido` si se lee una
+versión reducida): Jezero con el CTX DEM de Mars 2020 (USGS, 20 m) y Gale con el DEM fusionado
+HiRISE + CTX (USGS, 1 m, leído a 16 m). Alturas en metros sobre el areoide, esfera de 3.396.190 m.
+
+Marte usa la banda P25–P75; la Luna, P10–P90 (columna `banda`). Medido con 204.239 teselas que
+pasan NDVI: con P10–P90, Jezero y el aterrizaje de Curiosity aceptaban el 20–36 % de las teselas
+y la base del monte Sharp el 12 % (Luna: 179 y 1.041). Con P25–P75, el monte Sharp acepta 804.
+Jezero y Bradbury son llanuras suaves comunes en la Tierra: quedan para comparar sitios concretos
+(`buscar: false`) y no entran en candidatos ni zonas. Que una banda distinga no valida la analogía.
 
 ## Carga en PostgreSQL
 

@@ -12,11 +12,12 @@ GRADO_M = 111_320.0  # metros por grado de latitud (aprox.), solo para dimension
 
 
 def envolvente(teselas: list[dict], minimo: int) -> tuple[dict, int]:
-    """P10, P50 y P90 de cada variable sobre las subventanas válidas de la referencia."""
+    """P10, P25, P50, P75 y P90 de cada variable sobre las subventanas válidas de la referencia.
+    La Luna usa la banda P10–P90 y Marte P25–P75 (columna `banda` de referencias)."""
     ok = [t for t in teselas if t["estado"] == "calculado"]
     if len(ok) < minimo:
         raise ValueError(f"Solo {len(ok)} subventanas válidas (mínimo {minimo}); envolvente no fiable")
-    env = {v: {f"p{q}": round(float(np.percentile([t[v] for t in ok], q)), 4) for q in (10, 50, 90)}
+    env = {v: {f"p{q}": round(float(np.percentile([t[v] for t in ok], q)), 4) for q in (10, 25, 50, 75, 90)}
            for v in VARIABLES}
     return env, len(ok)
 

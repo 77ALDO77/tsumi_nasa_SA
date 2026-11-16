@@ -21,6 +21,7 @@ from collections import Counter, defaultdict
 from itertools import groupby, product
 from pathlib import Path
 
+import httpx
 import psycopg
 import rasterio
 from psycopg.types.json import Jsonb
@@ -74,6 +75,8 @@ def candidatos(conn, cfg, celda=None):
                            SELECT t.referencia_id, t.res_m, t.version_metodo, t.celda_id, t.ix, t.iy, t.lat, t.lon,
                                   t.dist_mediana
                            FROM teselas_referencia t JOIN contexto_modis c ON t.contexto_id = c.contexto_id
+                           JOIN referencias r ON r.referencia_id = t.referencia_id AND r.res_m = t.res_m
+                                AND r.version_metodo = t.version_metodo AND r.buscar
                            WHERE t.n_dentro = 3 AND {filtro} AND t.dist_mediana IS NOT NULL
                            AND t.ndvi_n = jsonb_array_length(c.metadata->'meses') AND t.ndvi_max <= c.umbral_ndvi""",
                              {"celda": celda}).rowcount
@@ -121,22 +124,24 @@ def grupos(puntos, distancia_km):
 
 
 def zonas(conn, cfg):
-    """Reemplazo completo de las zonas a partir de las coordenadas de las candidatas (una vez por tesela)."""
+    """Reemplazo completo de las zonas a partir de las coordenadas de las candidatas (una vez por tesela).
+    Se agrupa por cuerpo: una zona lunar y una marciana pueden solaparse, pero nunca se mezclan."""
     # ponytail: recálculo global en cada celda (113 ms con 2.824 filas). Si llega a pesar frente a los ~15 s
     # por celda, recalcular solo las zonas a <= distancia_km de la celda terminada.
     a = {**AGRUPACION, **cfg.get("agrupacion", {})}
     filas = conn.execute("""SELECT c.res_m, c.version_metodo, c.celda_id, c.ix, c.iy, c.lat, c.lon,
                                    min(c.dist_mediana), array_agg(DISTINCT c.referencia_id), b.zona,
                                    max(ST_Area(t.geom::geography)) / 1e6, min(ST_XMin(t.geom)), min(ST_YMin(t.geom)),
-                                   max(ST_XMax(t.geom)), max(ST_YMax(t.geom))
+                                   max(ST_XMax(t.geom)), max(ST_YMax(t.geom)), r.cuerpo
                             FROM candidatos c JOIN celdas_busqueda b USING (celda_id)
                             JOIN teselas t USING (celda_id, res_m, version_metodo, ix, iy)
-                            GROUP BY c.res_m, c.version_metodo, c.celda_id, c.ix, c.iy, c.lat, c.lon, b.zona
-                            ORDER BY 1, 2, 8, 3, 5, 4""").fetchall()
+                            JOIN referencias r USING (referencia_id, res_m, version_metodo)
+                            GROUP BY c.res_m, c.version_metodo, r.cuerpo, c.celda_id, c.ix, c.iy, c.lat, c.lon, b.zona
+                            ORDER BY 1, 2, 16, 8, 3, 5, 4""").fetchall()
     conocidos = [(nombre, _xyz(lat, lon)) for nombre, lat, lon in conn.execute(
         "SELECT coalesce(nombre, sitio_id), lat, lon FROM sitios WHERE cuerpo = 'tierra' AND rol LIKE 'analogo_nasa%'")]
     salida = []
-    for (res, version), parte in groupby(filas, key=lambda f: f[:2]):
+    for (res, version, cuerpo), parte in groupby(filas, key=lambda f: (f[0], f[1], f[15])):
         parte = list(parte)
         for miembros in grupos([(f[5], f[6]) for f in parte], a["distancia_km"]):
             ts = [parte[i] for i in miembros]
@@ -149,13 +154,53 @@ def zonas(conn, cfg):
                            # ponytail: recuadro mínimo/máximo; una zona que cruce el antimeridiano daría la vuelta al mundo
                            min(t[11] for t in ts), min(t[12] for t in ts), max(t[13] for t in ts), max(t[14] for t in ts),
                            len(ts) >= a["min_teselas"], cerca[1], cerca[0],
-                           cerca[0] is not None and cerca[0] <= a["sitio_conocido_km"]))
+                           cerca[0] is not None and cerca[0] <= a["sitio_conocido_km"], cuerpo))
     conn.execute("DELETE FROM zonas_candidatas")
     with conn.cursor() as cur:
         cur.executemany("""INSERT INTO zonas_candidatas (res_m, version_metodo, zona_id, n_teselas, area_km2, referencias,
                            region, lat, lon, dist_mediana, lon_min, lat_min, lon_max, lat_max, es_zona, sitio_cercano,
-                           sitio_cercano_km, conocida) VALUES (""" + ",".join(["%s"] * 18) + ")", salida)
+                           sitio_cercano_km, conocida, cuerpo) VALUES (""" + ",".join(["%s"] * 19) + ")", salida)
     return sum(z[14] for z in salida)
+
+
+def ubicar(conn, cfg, maximo):
+    """País, provincia y distrito de lugares aún sin ubicación, con OpenStreetMap (Nominatim).
+    Política del servicio: agente propio, como máximo 1 consulta/s y resultados en caché."""
+    u = cfg.get("ubicacion")
+    if not u or maximo < 1:
+        return 0
+    pendientes = conn.execute("""SELECT p.lat, p.lon FROM (
+            SELECT round(lat::numeric, 2) AS lat, round(lon::numeric, 2) AS lon, max(prioridad) AS prioridad FROM (
+                -- Sitios registrados, luego las zonas más extensas (las que muestra el atlas) y al final las aisladas.
+                SELECT lat, lon, 1000000 AS prioridad FROM sitios WHERE cuerpo = 'tierra'
+                UNION ALL SELECT lat, lon, CASE WHEN es_zona THEN n_teselas ELSE 0 END FROM zonas_candidatas WHERE res_m = 60) x
+            GROUP BY 1, 2) p
+        LEFT JOIN ubicaciones u ON u.lat = p.lat AND u.lon = p.lon
+        WHERE u.lat IS NULL OR (u.estado = 'error' AND u.consultado_utc < now() - interval '1 day')
+        ORDER BY p.prioridad DESC, p.lat, p.lon LIMIT %s""", (maximo,)).fetchall()
+    for i, (lat, lon) in enumerate(pendientes):
+        if i:
+            time.sleep(1.1)
+        try:
+            r = httpx.get(u["servicio"], params={"format": "jsonv2", "lat": str(lat), "lon": str(lon), "zoom": 10,
+                                                 "accept-language": "es"},
+                          headers={"User-Agent": u["agente"]}, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            a = data.get("address") or {}
+            fila = (a.get("country"), a.get("state") or a.get("region") or a.get("province"),
+                    a.get("county") or a.get("state_district") or a.get("municipality") or a.get("city")
+                    or a.get("town") or a.get("village"),
+                    "ok" if a.get("country") else "sin_resultado")
+        except (httpx.HTTPError, ValueError) as exc:
+            evento(log, "ubicacion_fallida", logging.WARNING, lat=float(lat), lon=float(lon), error=type(exc).__name__)
+            fila = (None, None, None, "error")
+        conn.execute("""INSERT INTO ubicaciones (lat, lon, pais, provincia, distrito, estado) VALUES (%s,%s,%s,%s,%s,%s)
+                        ON CONFLICT (lat, lon) DO UPDATE SET pais = EXCLUDED.pais, provincia = EXCLUDED.provincia,
+                        distrito = EXCLUDED.distrito, estado = EXCLUDED.estado, consultado_utc = now()""",
+                     (lat, lon, *fila))
+        conn.commit()
+    return len(pendientes)
 
 
 def celda_id(lat, lon):
@@ -236,19 +281,24 @@ def referencias(conn, cfg):
     tesela_m, minimo = cfg["tesela_m"], cfg["fraccion_valida_min"]
     conn.execute("LOCK TABLE candidatos IN SHARE ROW EXCLUSIVE MODE")
     for ref in cfg["referencias"]:
-        grids, transforms, crs, _ = ventana(ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], cfg["escalas_m"])
+        grids, transforms, crs, _ = ventana(ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], cfg["escalas_m"],
+                                            dem=ref.get("dem"), nivel_reducido=ref.get("dem_nivel_reducido"))
         for res, z in grids.items():
             env, n = envolvente(metricas_teselas(z, res, round(tesela_m / res), minimo), cfg["minimo_subventanas"])
             conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m, version_metodo,
-                             fuente_coordenadas, n_subventanas, envolvente, nombre) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                             fuente_coordenadas, n_subventanas, envolvente, nombre, banda, buscar, fuente)
+                             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                              ON CONFLICT (referencia_id, res_m, version_metodo) DO UPDATE SET envolvente = EXCLUDED.envolvente,
                              n_subventanas = EXCLUDED.n_subventanas, nombre = EXCLUDED.nombre,
                              lat = EXCLUDED.lat, lon = EXCLUDED.lon, lado_m = EXCLUDED.lado_m,
                              tesela_m = EXCLUDED.tesela_m, fuente_coordenadas = EXCLUDED.fuente_coordenadas,
+                             banda = EXCLUDED.banda, buscar = EXCLUDED.buscar, fuente = EXCLUDED.fuente,
                              calculado_utc = now()""",
                          (ref["id"], ref["cuerpo"], ref["lat"], ref["lon"], ref["lado_m"], tesela_m, res, VERSION_METODO,
-                          ref["fuente_coordenadas"], n, Jsonb(env), ref.get("nombre")))
-            evento(log, "referencia_calculada", referencia=ref["id"], res_m=res, n_subventanas=n, envolvente=env)
+                          ref["fuente_coordenadas"], n, Jsonb(env), ref.get("nombre"), ref.get("banda", "p10-p90"),
+                          ref.get("buscar", True), Jsonb(ref["fuente"]) if ref.get("fuente") else None))
+            evento(log, "referencia_calculada", referencia=ref["id"], res_m=res, n_subventanas=n, envolvente=env,
+                   banda=ref.get("banda", "p10-p90"), buscar=ref.get("buscar", True))
     evento(log, "candidatos_reconstruidos", n=candidatos(conn, cfg))
     conn.commit()
 
@@ -412,6 +462,8 @@ def main():
             celda = tomar(conn)
             if celda is None:
                 latido(conn, "agotado" if cfg.get("auto_encolar") else "esperando")
+                if args.accion == "bucle":
+                    ubicar(conn, cfg, cfg.get("ubicacion", {}).get("en_espera", 0))
                 evento(log, "cola_vacia", espera_s=0 if args.accion == "una" else cfg["espera_cola_vacia_s"])
                 if args.accion == "una":
                     return 0
@@ -423,6 +475,8 @@ def main():
                 procesar(conn, cfg, celda)
             except (ValueError, rasterio.errors.RasterioError, psycopg.DataError) as exc:
                 fallo(conn, celda, exc)
+            if args.accion == "bucle":
+                ubicar(conn, cfg, cfg.get("ubicacion", {}).get("por_celda", 0))
             if args.accion == "una":
                 return 0
 

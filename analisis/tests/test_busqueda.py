@@ -18,13 +18,20 @@ def test_tiles_keep_slope_and_borders():
     assert metricas_teselas(z, 60.0, 50, 0.9)[0]["estado"] == "evidencia_insuficiente"
 
 
-def test_envelope_is_p10_p90_and_requires_enough_windows():
+def test_envelope_has_both_bands_and_requires_enough_windows():
     tiles = [{"estado": "calculado", "pendiente_mediana_grados": i, "pendiente_p90_grados": 2 * i,
               "relieve_p95_p5_m": 10 * i} for i in range(1, 21)]
     env, n = envolvente(tiles, 20)
-    assert n == 20 and env["pendiente_mediana_grados"] == {"p10": 2.9, "p50": 10.5, "p90": 18.1}
+    assert n == 20 and env["pendiente_mediana_grados"] == {"p10": 2.9, "p25": 5.75, "p50": 10.5, "p75": 15.25, "p90": 18.1}
     with pytest.raises(ValueError):
         envolvente(tiles[:5], 20)
+
+
+def test_mars_reads_only_its_declared_regional_dem():
+    from analisis.fuentes import urls
+    assert urls("marte", 18.4, 77.5, 15000, "https://ejemplo/dem.tif") == ["https://ejemplo/dem.tif"]
+    with pytest.raises(ValueError, match="DEM regional"):
+        urls("marte", 18.4, 77.5, 15000)
 
 
 def test_tile_geometry_center():

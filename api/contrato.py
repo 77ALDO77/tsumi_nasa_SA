@@ -30,10 +30,13 @@ COBERTURA = {
     "analogo_nasa_marte": "Análogo NASA para Marte",
     "referencia_gvp_no_es_sitio_de_ensayo": "Punto de referencia, no es sitio de ensayo",
 }
-FUENTES_DATOS = [
-    {"title": "LRO LOLA, modelos de elevación polares (NASA PDS)", "url": "https://pds-geosciences.wustl.edu/missions/lro/lola.htm"},
-    {"title": "Copernicus DEM GLO-30 (AWS Open Data)", "url": "https://registry.opendata.aws/copernicus-dem/"},
-]
+LOLA = {"title": "LRO LOLA, modelos de elevación polares (NASA PDS)", "url": "https://pds-geosciences.wustl.edu/missions/lro/lola.htm"}
+GLO30 = {"title": "Copernicus DEM GLO-30 (AWS Open Data)", "url": "https://registry.opendata.aws/copernicus-dem/"}
+CUERPO = {"luna": "Luna", "marte": "Marte"}
+BANDAS = {"p10-p90": ("p10", "p90", "P10–P90"), "p25-p75": ("p25", "p75", "P25–P75")}
+SIN_BUSQUEDA = ("Esta referencia no se usa para seleccionar candidatas: su relieve es una llanura suave muy común en "
+                "los desiertos terrestres (en la prueba del equipo coincidían decenas de miles de teselas). "
+                "Sirve para comparar lugares concretos.")
 
 
 class Solicitud(BaseModel):
@@ -68,29 +71,54 @@ def sites():
     """Sitios NASA registrados más los mejores candidatos detectados (3/3 dentro de la envolvente) por referencia."""
     with conectar() as conn:
         out = [{"id": s["sitio_id"], "name": s["nombre"] or s["sitio_id"], "lat": s["lat"], "lon": s["lon"],
-                "coverage": COBERTURA.get(s["rol"], "Sitio registrado")}
-               for s in conn.execute("SELECT * FROM sitios WHERE cuerpo = 'tierra' ORDER BY sitio_id").fetchall()]
-        nombres = {r["referencia_id"]: r["nombre"] for r in referencias(conn)}
-        for es_zona, orden, limite in ((True, "n_teselas DESC, dist_mediana", ZONAS_EN_ATLAS),
-                                       (False, "dist_mediana", AISLADAS_EN_ATLAS)):
-            for z in conn.execute(f"""SELECT * FROM zonas_candidatas WHERE res_m = %s AND version_metodo = %s
-                                      AND es_zona = %s ORDER BY {orden}, zona_id LIMIT %s""",
-                                  (RES_M, VERSION_POR_DEFECTO, es_zona, limite)).fetchall():
-                refs = " y ".join(nombres.get(r, r) for r in z["referencias"])
-                cobertura = (f"Zona candidata · {z['n_teselas']} teselas ({cifra(z['area_km2'], 'km²')}) · 3/3 frente a {refs}"
-                             if es_zona else f"Candidato aislado · 3/3 frente a {refs}")
-                if z["conocida"]:
-                    cobertura += f" · a {cifra(z['sitio_cercano_km'], 'km')} de {z['sitio_cercano']} (análogo conocido)"
-                out.append({"id": "T~" + z["zona_id"],
-                            "name": f"{'Zona' if es_zona else 'Candidato'} {coordenadas(z['lat'], z['lon'])}",
-                            "lat": z["lat"], "lon": z["lon"], "coverage": cobertura,
-                            "zone": {"tiles": z["n_teselas"], "areaKm2": round(z["area_km2"], 1), "isZone": es_zona,
-                                     "references": [nombres.get(r, r) for r in z["referencias"]],
-                                     "searchArea": z["region"], "known": z["conocida"],
-                                     "nearestKnownSite": z["sitio_cercano"],
-                                     "nearestKnownKm": None if z["sitio_cercano_km"] is None else round(z["sitio_cercano_km"], 1),
-                                     "bbox": [z["lon_min"], z["lat_min"], z["lon_max"], z["lat_max"]]}})
+                "coverage": COBERTURA.get(s["rol"], "Sitio registrado"), "location": ubicacion(s)}
+               for s in conn.execute(f"""SELECT s.*, {UBICACION_SQL} FROM sitios s {UBICACION_JOIN.format(t='s')}
+                                         WHERE s.cuerpo = 'tierra' ORDER BY s.sitio_id""").fetchall()]
+        refs_db = referencias(conn)
+        nombres = {r["referencia_id"]: r["nombre"] for r in refs_db}
+        cuerpos = {r["referencia_id"]: r["cuerpo"] for r in refs_db}
+        # Zonas agrupadas por cuerpo, con cupo propio: las marcianas no quedan fuera por ser menos, o al revés.
+        for cuerpo in ("luna", "marte"):
+            for es_zona, orden, limite in ((True, "n_teselas DESC, dist_mediana", ZONAS_EN_ATLAS),
+                                           (False, "dist_mediana", AISLADAS_EN_ATLAS)):
+                for z in conn.execute(f"""SELECT z.*, {UBICACION_SQL} FROM zonas_candidatas z {UBICACION_JOIN.format(t='z')}
+                                          WHERE z.res_m = %s AND z.version_metodo = %s AND z.cuerpo = %s AND z.es_zona = %s
+                                          ORDER BY {orden}, zona_id LIMIT %s""",
+                                      (RES_M, VERSION_POR_DEFECTO, cuerpo, es_zona, limite)).fetchall():
+                    out.append(zona_sitio(z, es_zona, nombres, cuerpos))
     return out
+
+
+UBICACION_SQL = "u.pais AS u_pais, u.provincia AS u_provincia, u.distrito AS u_distrito, u.estado AS u_estado"
+UBICACION_JOIN = ("LEFT JOIN ubicaciones u ON u.lat = round({t}.lat::numeric, 2) "
+                  "AND u.lon = round({t}.lon::numeric, 2)")
+
+
+def ubicacion(fila):
+    """None mientras el trabajador no la haya consultado; sin_resultado en el mar o sin división administrativa."""
+    if fila["u_estado"] in (None, "error"):
+        return None
+    return {"status": fila["u_estado"], "country": fila["u_pais"], "province": fila["u_provincia"],
+            "district": fila["u_distrito"], "source": "© OpenStreetMap (Nominatim)"}
+
+
+def zona_sitio(z, es_zona, nombres, cuerpos):
+    refs = " y ".join(f"{nombres.get(r, r)} ({CUERPO[cuerpos.get(r, 'luna')]})" for r in z["referencias"])
+    cobertura = (f"Zona candidata · {z['n_teselas']} teselas ({cifra(z['area_km2'], 'km²')}) · 3/3 frente a {refs}"
+                 if es_zona else f"Candidato aislado · 3/3 frente a {refs}")
+    if z["conocida"]:
+        cobertura += f" · a {cifra(z['sitio_cercano_km'], 'km')} de {z['sitio_cercano']} (análogo conocido)"
+    # La misma tesela puede encabezar una zona lunar y otra marciana: el sufijo mantiene ids únicos.
+    return {"id": "T~" + z["zona_id"] + ("~marte" if z["cuerpo"] == "marte" else ""),
+            "name": f"{'Zona' if es_zona else 'Candidato'} {coordenadas(z['lat'], z['lon'])}",
+            "lat": z["lat"], "lon": z["lon"], "coverage": cobertura, "location": ubicacion(z),
+            "zone": {"tiles": z["n_teselas"], "areaKm2": round(z["area_km2"], 1), "isZone": es_zona,
+                     "references": [nombres.get(r, r) for r in z["referencias"]],
+                     "bodies": [z["cuerpo"]],
+                     "searchArea": z["region"], "known": z["conocida"],
+                     "nearestKnownSite": z["sitio_cercano"],
+                     "nearestKnownKm": None if z["sitio_cercano_km"] is None else round(z["sitio_cercano_km"], 1),
+                     "bbox": [z["lon_min"], z["lat_min"], z["lon_max"], z["lat_max"]]}}
 
 
 def contexto_nasa(tile, activo):
@@ -133,7 +161,7 @@ def tesela_de(site_id: str):
     """Condición SQL y parámetros para localizar la tesela de un sitio; None si el id no es válido."""
     if site_id.startswith("T~"):
         try:
-            _, celda, ix, iy = site_id.split("~")
+            _, celda, ix, iy = site_id.removesuffix("~marte").split("~")
             return "celda_id = %(celda)s AND ix = %(ix)s AND iy = %(iy)s", {"celda": celda, "ix": int(ix), "iy": int(iy)}
         except ValueError:
             return None
@@ -149,9 +177,8 @@ def comparisons(site_id: str):
         if not existe:
             raise HTTPException(404, f"Sitio desconocido: {site_id}")
         refs = referencias(conn)
-    cuerpo = {"luna": "Luna", "marte": "Marte"}
     return [{"id": f"{r['referencia_id']}~{var}", "label": f"{r['nombre']} · {nombre}", "variable": nombre,
-             "reference": f"{cuerpo[r['cuerpo']]} · {r['nombre']}"}
+             "reference": f"{CUERPO[r['cuerpo']]} · {r['nombre']}"}
             for r in refs for var, (_, _, nombre, _) in VARIABLES.items()]
 
 
@@ -182,9 +209,12 @@ def analizar(site_id: str, comparison_id: str) -> dict:
                     "message": f"La tesela de este sitio aún no se ha calculado ({estado})."}
         activo = conn.execute("SELECT * FROM contexto_modis").fetchone()
     env = ref["envolvente"][key]
-    if env.get("p50") is None:
+    inf, sup, banda = BANDAS[ref.get("banda") or "p10-p90"]
+    if env.get("p50") is None or env.get(inf) is None or env.get(sup) is None:
         return {"id": ident, "status": "insufficient_data",
-                "message": "La envolvente de la referencia no tiene mediana: hay que recalcular las referencias."}
+                "message": "La envolvente de la referencia está incompleta: hay que recalcular las referencias."}
+    fuente_dem = ref.get("fuente") or LOLA
+    nota = "" if ref.get("buscar", True) else SIN_BUSQUEDA + " "
     earth, mid = tile[col], env["p50"]
     dentro = tile["d_" + col] == 0
     fuentes = [etiquetas()[e] for e in (sitio or {}).get("etiquetas") or [] if e in etiquetas()]
@@ -195,12 +225,13 @@ def analizar(site_id: str, comparison_id: str) -> dict:
         "earthValue": round(earth, 2), "referenceValue": round(mid, 2), "unit": unidad,
         "difference": round(earth - mid, 2),
         "scale": (f"Tesela de 3 km a {RES_M:g} m (Copernicus GLO-30, celda {tile['celda_id']}) frente a la mediana de "
-                  f"{ref['n_subventanas']} subventanas de 3 km de {ref['nombre'] or ref_id} (LRO LOLA)."),
-        "limitation": (f"{nombre}: la referencia va de {cifra(env['p10'], unidad)} a {cifra(env['p90'], unidad)} "
-                       f"(P10–P90) y este sitio queda {'dentro' if dentro else 'fuera'}. En las 3 variables de relieve, "
-                         f"{tile['n_dentro']}/3 dentro de la envolvente. " + coordenada + contexto + " "
-                        + " ".join(LIMITES[ref["cuerpo"]]) + " " + DESCARGO),
-        "sources": fuentes + FUENTES_DATOS + fuentes_modis, "earthContext": valores_contexto(tile, activo)}}
+                  f"{ref['n_subventanas']} subventanas de 3 km de {ref['nombre'] or ref_id} "
+                  f"({CUERPO[ref['cuerpo']]}, {fuente_dem['title']})."),
+        "limitation": (f"{nombre}: la referencia va de {cifra(env[inf], unidad)} a {cifra(env[sup], unidad)} "
+                       f"({banda}) y este sitio queda {'dentro' if dentro else 'fuera'}. En las 3 variables de relieve, "
+                       f"{tile['n_dentro']}/3 dentro de la envolvente. " + nota + coordenada + contexto + " "
+                       + " ".join(LIMITES[ref["cuerpo"]]) + " " + DESCARGO),
+        "sources": fuentes + [fuente_dem, GLO30] + fuentes_modis, "earthContext": valores_contexto(tile, activo)}}
 
 
 @router.post("/analyses")
