@@ -69,6 +69,18 @@ def test_queue_cells_deduplicate_and_keep_priority(monkeypatch):
     assert trabajador.celdas_del_perfil(cfg) == [cells[0]]
 
 
+def test_groups_chain_close_points_without_grid_cuts():
+    from analisis.trabajador import grupos
+    # 3 km entre vecinas en el ecuador (0,027°); la cuarta queda a 7 km de la tercera.
+    fila = [(0, 0), (0, .027), (0, .054), (0, .117)]
+    assert grupos(fila, 6) == [[0, 1, 2], [3]]
+    assert grupos(fila, 10) == [[0, 1, 2, 3]]
+    assert grupos([(10, 179.99), (10, -179.99)], 6) == [[0, 1]]  # antimeridiano: ~2,2 km
+    assert grupos([(89.99, 0), (89.99, 180)], 6) == [[0, 1]]      # polo: ~2,2 km
+    assert grupos([(35, -111), (35.1, -111)], 6) == [[0], [1]]    # 11 km
+    assert grupos([], 6) == []
+
+
 def test_queue_cells_reject_bad_coordinates():
     from analisis.trabajador import celdas_config
     for bbox in [[-181, 0, 1, 1], [0, -91, 1, 1], [0, 0, 0, 1], [0.5, 0, 1, 1], [0, 0, 1]]:

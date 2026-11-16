@@ -1,5 +1,5 @@
 {
-  "version": "busqueda-2",
+  "version": "busqueda-3",
   "proposito": "Búsqueda continua de teselas terrestres cuyo relieve cae dentro de la envolvente P10–P90 de una región lunar. Es preselección por relieve, no certificación de analogía.",
   "tesela_m": 3000,
   "escalas_m": [
@@ -9,6 +9,12 @@
   "fraccion_valida_min": 0.9,
   "minimo_subventanas": 20,
   "espera_cola_vacia_s": 60,
+  "agrupacion": {
+    "distancia_km": 6,
+    "min_teselas": 3,
+    "sitio_conocido_km": 50,
+    "nota": "Zonas por distancia entre centros de candidatas a la misma resolución, encadenando vecinas. Elegido con 590 candidatas reales: vecina típica a 3–4,25 km; con 10 km se formaban franjas de 75 km. Menos de 3 teselas = candidata aislada. 'Conocida' = alguna tesela a <= 50 km de un análogo NASA registrado."
+  },
   "auto_encolar": {
     "lote": 24,
     "minimo_pendientes": 6,

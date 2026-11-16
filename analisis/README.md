@@ -14,7 +14,7 @@ Cada ventana se lee por HTTP con lecturas parciales (GDAL `/vsicurl/`), sin desc
 
 ```bash
 uv pip install -r analisis/requirements.txt        # numpy, rasterio/GDAL, psycopg, httpx, pyhdf/HDF4
-python -m pytest -q analisis/tests                 # 24 pruebas sin red
+python -m pytest -q analisis/tests                 # 25 pruebas sin red
 python -m analisis analisis/inputs/mvp0.json --salida analisis/data/<carpeta-nueva> [--solo LUN-SHACKLETON]
 ```
 
@@ -67,9 +67,17 @@ Cómo funciona:
   con QA y SHA-256 de los HDF4, y muestrea todas las teselas existentes. El trabajador
   necesita ese contexto antes de procesar nuevas celdas.
 - **Catálogo precalculado.** El trabajador mantiene `candidatos` tras cada celda, cambio de
-  referencia o contexto. `/api/sites` lee su índice, hasta 30 candidatos por referencia.
+  referencia o contexto. `/api/sites` lee las zonas derivadas de este ranking (ver «Zonas»).
   Exige 3/3 dentro y NDVI máximo ≤0,3 con dato válido en todos los meses seleccionados.
   Es un filtro exploratorio, no un umbral NASA ni prueba de ausencia de vegetación.
+- **Zonas.** En la misma transacción que el ranking, las candidatas se agrupan por la distancia
+  entre los centros de sus teselas: a ≤6 km se unen, encadenando vecinas (`agrupacion` en
+  `busqueda.json`). Con 3 o más teselas forman una zona; si no, son candidatas aisladas. Cada
+  zona guarda su mejor tesela, recuadro, área de las teselas que cumplen, referencias y si
+  alguna tesela está a ≤50 km de un análogo NASA registrado. El valor se eligió con las 590
+  candidatas reales disponibles: la vecina típica está a 3–4,25 km y con 10 km se formaban
+  franjas de 75 km. Agrupar no valida la zona: solo evita contar como lugares distintos
+  teselas pegadas.
 - **Nombres y fuentes.** La acción `catalogo` completa los sitios existentes desde
   `inputs/mvp0.json`, verificando sus coordenadas y sin recalcular métricas.
 - **Variables que puntúan.** Pendiente mediana, pendiente P90 y relieve. La rugosidad no puntúa porque está correlacionada con el relieve.

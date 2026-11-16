@@ -15,7 +15,8 @@ from api.main import DESCARGO, LIMITES, SQL_DISTANCIAS, VERSION_POR_DEFECTO, cif
 
 router = APIRouter()
 RES_M = 60.0
-CANDIDATOS_POR_REFERENCIA = 30
+ZONAS_EN_ATLAS = 50      # zonas de >=3 teselas cercanas, primero las más extensas
+AISLADAS_EN_ATLAS = 10   # candidatas sin vecinas, por cercanía a la mediana
 ETIQUETAS = Path(__file__).resolve().parent.parent / "scrapping/docs/etiquetas_analogos.json"
 # id de variable -> (columna en teselas, clave de la envolvente, nombre, unidad)
 VARIABLES = {
@@ -69,20 +70,26 @@ def sites():
         out = [{"id": s["sitio_id"], "name": s["nombre"] or s["sitio_id"], "lat": s["lat"], "lon": s["lon"],
                 "coverage": COBERTURA.get(s["rol"], "Sitio registrado")}
                for s in conn.execute("SELECT * FROM sitios WHERE cuerpo = 'tierra' ORDER BY sitio_id").fetchall()]
-        seen = set()
-        for ref in referencias(conn):
-            rows = conn.execute("""SELECT celda_id, ix, iy, lat, lon FROM candidatos
-                                     WHERE referencia_id = %(ref)s AND res_m = %(res)s AND version_metodo = %(version)s
-                                    ORDER BY dist_mediana, celda_id, iy, ix LIMIT %(lim)s""",
-                                {"ref": ref["referencia_id"], "res": RES_M, "version": VERSION_POR_DEFECTO,
-                                 "lim": CANDIDATOS_POR_REFERENCIA}).fetchall()
-            for r in rows:
-                sid = f"T~{r['celda_id']}~{r['ix']}~{r['iy']}"
-                if sid in seen:
-                    continue
-                seen.add(sid)
-                out.append({"id": sid, "name": f"Candidato {coordenadas(r['lat'], r['lon'])}", "lat": r["lat"],
-                            "lon": r["lon"], "coverage": f"Candidato detectado · 3/3 frente a {ref['nombre']}"})
+        nombres = {r["referencia_id"]: r["nombre"] for r in referencias(conn)}
+        for es_zona, orden, limite in ((True, "n_teselas DESC, dist_mediana", ZONAS_EN_ATLAS),
+                                       (False, "dist_mediana", AISLADAS_EN_ATLAS)):
+            for z in conn.execute(f"""SELECT * FROM zonas_candidatas WHERE res_m = %s AND version_metodo = %s
+                                      AND es_zona = %s ORDER BY {orden}, zona_id LIMIT %s""",
+                                  (RES_M, VERSION_POR_DEFECTO, es_zona, limite)).fetchall():
+                refs = " y ".join(nombres.get(r, r) for r in z["referencias"])
+                cobertura = (f"Zona candidata · {z['n_teselas']} teselas ({cifra(z['area_km2'], 'km²')}) · 3/3 frente a {refs}"
+                             if es_zona else f"Candidato aislado · 3/3 frente a {refs}")
+                if z["conocida"]:
+                    cobertura += f" · a {cifra(z['sitio_cercano_km'], 'km')} de {z['sitio_cercano']} (análogo conocido)"
+                out.append({"id": "T~" + z["zona_id"],
+                            "name": f"{'Zona' if es_zona else 'Candidato'} {coordenadas(z['lat'], z['lon'])}",
+                            "lat": z["lat"], "lon": z["lon"], "coverage": cobertura,
+                            "zone": {"tiles": z["n_teselas"], "areaKm2": round(z["area_km2"], 1), "isZone": es_zona,
+                                     "references": [nombres.get(r, r) for r in z["referencias"]],
+                                     "searchArea": z["region"], "known": z["conocida"],
+                                     "nearestKnownSite": z["sitio_cercano"],
+                                     "nearestKnownKm": None if z["sitio_cercano_km"] is None else round(z["sitio_cercano_km"], 1),
+                                     "bbox": [z["lon_min"], z["lat_min"], z["lon_max"], z["lat_max"]]}})
     return out
 
 

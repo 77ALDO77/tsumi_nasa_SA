@@ -92,6 +92,12 @@ Los reemplazos del ranking se serializan entre trabajadores, y eliminan candidat
 La migración no recalcula el terreno ni modifica las celdas ya procesadas. No se debe
 confundir contexto global MODIS con cobertura global de relieve.
 
+### Zonas de candidatas (migración 006)
+
+La tabla `zonas_candidatas` se llena sola al terminar la siguiente celda: no hace falta
+recalcular el terreno. Para rellenarla sin esperar, basta `referencias` o `contexto`, que
+también reconstruyen el ranking. El API solo la lee, con los permisos por defecto de `tsumi_lectura`.
+
 ### Búsqueda por lotes y actividad (migración 005)
 
 El mismo trabajador repone la cola: lotes de 24 si quedan menos de 6 pendientes, sin reabrir

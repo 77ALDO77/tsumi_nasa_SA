@@ -13,9 +13,12 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 import socket
 import time
+from collections import Counter, defaultdict
+from itertools import groupby, product
 from pathlib import Path
 
 import psycopg
@@ -34,6 +37,9 @@ log = configurar("trabajador")
 MAX_INTENTOS = 3
 _contexto = {}
 CATALOGO = Path(__file__).parent / "inputs/mvp0.json"
+R_TIERRA_KM = 6371.0088
+# 6 km junta teselas de 3 km pegadas y tolera el hueco de una; 10 km ya encadenaba franjas de 75 km.
+AGRUPACION = {"distancia_km": 6, "min_teselas": 3, "sitio_conocido_km": 50}
 
 
 def contexto(cfg):
@@ -61,17 +67,95 @@ def candidatos(conn, cfg, celda=None):
     filtro = "t.celda_id = %(celda)s" if celda is not None else "TRUE"
     conn.execute("DELETE FROM candidatos" + (" WHERE celda_id = %s" if celda is not None else ""),
                  (celda,) if celda is not None else ())
-    if not conn.execute("SELECT 1 FROM contexto_modis").fetchone():
-        return 0
-    comprobar_contexto(conn, cfg)
-    cur = conn.execute(f"""INSERT INTO candidatos
+    n = 0
+    if conn.execute("SELECT 1 FROM contexto_modis").fetchone():
+        comprobar_contexto(conn, cfg)
+        n = conn.execute(f"""INSERT INTO candidatos
                            SELECT t.referencia_id, t.res_m, t.version_metodo, t.celda_id, t.ix, t.iy, t.lat, t.lon,
                                   t.dist_mediana
                            FROM teselas_referencia t JOIN contexto_modis c ON t.contexto_id = c.contexto_id
                            WHERE t.n_dentro = 3 AND {filtro} AND t.dist_mediana IS NOT NULL
                            AND t.ndvi_n = jsonb_array_length(c.metadata->'meses') AND t.ndvi_max <= c.umbral_ndvi""",
-                       {"celda": celda})
-    return cur.rowcount
+                             {"celda": celda}).rowcount
+    zonas(conn, cfg)
+    return n
+
+
+def _xyz(lat, lon):
+    la, lo = math.radians(lat), math.radians(lon)
+    return (R_TIERRA_KM * math.cos(la) * math.cos(lo), R_TIERRA_KM * math.cos(la) * math.sin(lo),
+            R_TIERRA_KM * math.sin(la))
+
+
+def _km(a, b):
+    """Distancia sobre la esfera a partir de la cuerda entre dos puntos 3D."""
+    return 2 * R_TIERRA_KM * math.asin(min(1.0, math.dist(a, b) / (2 * R_TIERRA_KM)))
+
+
+def grupos(puntos, distancia_km):
+    """Componentes conexas: dos puntos (lat, lon) van juntos si están a <= distancia_km, encadenando vecinos.
+    Cubos 3D del tamaño de la cuerda equivalente: sin cortes en polos ni antimeridiano y sin comparar todos los pares."""
+    cuerda = 2 * R_TIERRA_KM * math.sin(distancia_km / (2 * R_TIERRA_KM))
+    xyz = [_xyz(*p) for p in puntos]
+    padre = list(range(len(xyz)))
+
+    def raiz(i):
+        while padre[i] != i:
+            padre[i] = padre[padre[i]]
+            i = padre[i]
+        return i
+
+    cubos = defaultdict(list)
+    for i, v in enumerate(xyz):
+        cubos[tuple(math.floor(c / cuerda) for c in v)].append(i)
+    for clave, miembros in cubos.items():
+        for d in product((-1, 0, 1), repeat=3):
+            for j in cubos.get(tuple(c + e for c, e in zip(clave, d)), ()):
+                for i in miembros:
+                    if i < j and math.dist(xyz[i], xyz[j]) <= cuerda:
+                        padre[raiz(i)] = raiz(j)
+    salida = defaultdict(list)
+    for i in range(len(xyz)):
+        salida[raiz(i)].append(i)  # en orden de entrada: el primero es el mejor si la entrada viene ordenada
+    return list(salida.values())
+
+
+def zonas(conn, cfg):
+    """Reemplazo completo de las zonas a partir de las coordenadas de las candidatas (una vez por tesela)."""
+    # ponytail: recálculo global en cada celda (113 ms con 2.824 filas). Si llega a pesar frente a los ~15 s
+    # por celda, recalcular solo las zonas a <= distancia_km de la celda terminada.
+    a = {**AGRUPACION, **cfg.get("agrupacion", {})}
+    filas = conn.execute("""SELECT c.res_m, c.version_metodo, c.celda_id, c.ix, c.iy, c.lat, c.lon,
+                                   min(c.dist_mediana), array_agg(DISTINCT c.referencia_id), b.zona,
+                                   max(ST_Area(t.geom::geography)) / 1e6, min(ST_XMin(t.geom)), min(ST_YMin(t.geom)),
+                                   max(ST_XMax(t.geom)), max(ST_YMax(t.geom))
+                            FROM candidatos c JOIN celdas_busqueda b USING (celda_id)
+                            JOIN teselas t USING (celda_id, res_m, version_metodo, ix, iy)
+                            GROUP BY c.res_m, c.version_metodo, c.celda_id, c.ix, c.iy, c.lat, c.lon, b.zona
+                            ORDER BY 1, 2, 8, 3, 5, 4""").fetchall()
+    conocidos = [(nombre, _xyz(lat, lon)) for nombre, lat, lon in conn.execute(
+        "SELECT coalesce(nombre, sitio_id), lat, lon FROM sitios WHERE cuerpo = 'tierra' AND rol LIKE 'analogo_nasa%'")]
+    salida = []
+    for (res, version), parte in groupby(filas, key=lambda f: f[:2]):
+        parte = list(parte)
+        for miembros in grupos([(f[5], f[6]) for f in parte], a["distancia_km"]):
+            ts = [parte[i] for i in miembros]
+            mejor = ts[0]
+            cerca = min(((_km(_xyz(t[5], t[6]), xyz), nombre) for t in ts for nombre, xyz in conocidos),
+                        default=(None, None))
+            salida.append((res, version, f"{mejor[2]}~{mejor[3]}~{mejor[4]}", len(ts), sum(t[10] for t in ts),
+                           sorted({r for t in ts for r in t[8]}), Counter(t[9] for t in ts).most_common(1)[0][0],
+                           mejor[5], mejor[6], mejor[7],
+                           # ponytail: recuadro mínimo/máximo; una zona que cruce el antimeridiano daría la vuelta al mundo
+                           min(t[11] for t in ts), min(t[12] for t in ts), max(t[13] for t in ts), max(t[14] for t in ts),
+                           len(ts) >= a["min_teselas"], cerca[1], cerca[0],
+                           cerca[0] is not None and cerca[0] <= a["sitio_conocido_km"]))
+    conn.execute("DELETE FROM zonas_candidatas")
+    with conn.cursor() as cur:
+        cur.executemany("""INSERT INTO zonas_candidatas (res_m, version_metodo, zona_id, n_teselas, area_km2, referencias,
+                           region, lat, lon, dist_mediana, lon_min, lat_min, lon_max, lat_max, es_zona, sitio_cercano,
+                           sitio_cercano_km, conocida) VALUES (""" + ",".join(["%s"] * 18) + ")", salida)
+    return sum(z[14] for z in salida)
 
 
 def celda_id(lat, lon):

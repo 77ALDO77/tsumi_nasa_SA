@@ -180,9 +180,14 @@ def estado_busqueda():
         candidatos = conn.execute("""SELECT count(*) AS n FROM (
                                      SELECT DISTINCT celda_id,ix,iy FROM candidatos
                                      WHERE res_m=60 AND version_metodo=%s) c""", (VERSION_POR_DEFECTO,)).fetchone()
+        zonas = conn.execute("""SELECT count(*) FILTER (WHERE es_zona) AS zonas, count(*) FILTER (WHERE NOT es_zona) AS aisladas,
+                                count(*) FILTER (WHERE es_zona AND NOT conocida) AS nuevas
+                                FROM zonas_candidatas WHERE res_m=60 AND version_metodo=%s""", (VERSION_POR_DEFECTO,)).fetchone()
     return {"celdas": {c["estado"]: c["n"] for c in celdas}, "teselas": teselas["n"],
             "ultima_actualizacion": teselas["ultima"], "errores": errores,
-            "trabajadores": trabajadores, "contexto_nasa": contexto, "teselas_candidatas": candidatos["n"]}
+            "trabajadores": trabajadores, "contexto_nasa": contexto, "teselas_candidatas": candidatos["n"],
+            "zonas_candidatas": zonas["zonas"], "zonas_lejos_de_analogos_conocidos": zonas["nuevas"],
+            "candidatas_aisladas": zonas["aisladas"]}
 
 
 @app.get("/referencias")

@@ -39,9 +39,9 @@ Cumple el contrato de `ANALISIS-FRONTEND.md` del repo `nasa-azzu-front` sin modi
 
 | Ruta | Respuesta |
 |---|---|
-| `GET /api/sites` | `[{id, name, lat, lon, coverage}]`: los sitios terrestres registrados y hasta 30 candidatos por referencia, leídos del ranking indexado del trabajador (3/3 y filtro NDVI). El id de un candidato es `T~<celda>~<ix>~<iy>` |
+| `GET /api/sites` | `[{id, name, lat, lon, coverage, zone?}]`: los sitios terrestres registrados, hasta 50 zonas de ≥3 teselas candidatas cercanas (las más extensas primero) y 10 candidatas aisladas. El id de una zona es el de su mejor tesela, `T~<celda>~<ix>~<iy>`, y sirve para comparar. `zone`: `tiles`, `areaKm2`, `isZone`, `references`, `searchArea`, `known`, `nearestKnownSite`, `nearestKnownKm`, `bbox` [lon_min, lat_min, lon_max, lat_max]. El id cambia si dos zonas se unen |
 | `GET /api/sites/{id}/comparisons` | `[{id, label, variable, reference}]`: una por referencia y variable. El id es `<referencia>~<variable>` |
-| `GET /api/search/status` | Cola, registros de relieve, teselas candidatas únicas a 60 m, contexto MODIS y señales recientes de los trabajadores. Se puede consultar cada 30 s; una señal antigua no prueba que el proceso esté detenido |
+| `GET /api/search/status` | Cola, registros de relieve, teselas candidatas únicas a 60 m, `zonas_candidatas`, `zonas_lejos_de_analogos_conocidos`, `candidatas_aisladas`, contexto MODIS y señales recientes de los trabajadores. Se puede consultar cada 30 s; una señal antigua no prueba que el proceso esté detenido |
 | `POST /api/analyses` `{siteId, comparisonId}` | `{id, status, result?, message?}`. Responde al momento: las métricas ya están calculadas, así que nunca queda `pending`. Si la celda del sitio aún no se procesó, devuelve `insufficient_data` con el estado de la celda |
 | `GET /api/analyses/{siteId}\|{comparisonId}` | Lo mismo |
 

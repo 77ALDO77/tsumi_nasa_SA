@@ -170,7 +170,8 @@ def test_frontend_contract(monkeypatch):
     assert sites["TIE-C"] == {"id": "TIE-C", "name": "Sitio TIE-C", "lat": 30.05, "lon": 30.05,
                               "coverage": "Análogo NASA documentado"}
     candidate = sites["T~N30E030~0~0"]
-    assert candidate["coverage"] == "Candidato detectado · 3/3 frente a Región C" and set(candidate) == {"id", "name", "lat", "lon", "coverage"}
+    assert candidate["coverage"].startswith("Candidato aislado · 3/3 frente a Región C")
+    assert set(candidate) == {"id", "name", "lat", "lon", "coverage", "zone"} and candidate["zone"]["tiles"] == 1
 
     comps = client.get("/api/sites/TIE-C/comparisons").json()
     comp = next(c for c in comps if c["id"] == "LUN-C~relieve")
@@ -250,9 +251,13 @@ def test_candidates_refresh_filter_limit_and_atomicity(monkeypatch):
         conn.commit()
         client = TestClient(app)
         detectados = [s for s in client.get("/api/sites").json() if s["id"].startswith("T~N20E020")]
-        assert len(detectados) == 30 and detectados[-1]["id"] == "T~N20E020~29~0"
+        # 36 teselas en el mismo punto forman una sola zona, representada por la mejor
+        assert [s["id"] for s in detectados] == ["T~N20E020~0~0"]
+        assert detectados[0]["zone"]["tiles"] == 36 and detectados[0]["zone"]["isZone"]
         conn.execute("UPDATE teselas SET ndvi_max = .9 WHERE version_metodo = %s AND ix = 0", (version,))
         assert trabajador.candidatos(conn, cfg, "N20E020") == 35  # no deja candidato obsoleto
+        assert conn.execute("SELECT zona_id, n_teselas FROM zonas_candidatas WHERE version_metodo = %s",
+                            (version,)).fetchall() == [("N20E020~1~0", 35)]  # la zona tampoco
         conn.commit()
         with pytest.raises(ValueError, match="Contexto/umbral"):
             trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .2})
@@ -263,6 +268,58 @@ def test_candidates_refresh_filter_limit_and_atomicity(monkeypatch):
         assert trabajador.candidatos(conn, cfg, "N20E020") == 0
         conn.rollback()  # referencia + ranking vuelven juntos al estado anterior
         assert conn.execute("SELECT count(*) FROM candidatos WHERE referencia_id = 'LUN-Q'").fetchone()[0] == 35
+
+
+@pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
+def test_zones_group_nearby_candidates_and_flag_known_sites(monkeypatch):
+    from psycopg.types.json import Jsonb
+
+    from analisis import trabajador
+    from analisis.cargar import aplicar_migraciones
+
+    version = "prueba-zonas"
+    monkeypatch.setattr(trabajador, "contexto", lambda cfg: {"contexto_id": "zonas-test"})
+    pend = {"pendiente_mediana_grados": {"p10": 4, "p50": 6, "p90": 8},
+            "pendiente_p90_grados": {"p10": 10, "p50": 13, "p90": 16}}
+    with psycopg.connect(DSN) as conn:
+        with conn.cursor() as cur:
+            aplicar_migraciones(cur)
+        conn.execute("DELETE FROM teselas WHERE version_metodo = %s", (version,))
+        conn.execute("DELETE FROM referencias WHERE version_metodo = %s", (version,))
+        for ref, relieve in (("LUN-Z1", 200), ("LUN-Z2", 400)):
+            conn.execute("""INSERT INTO referencias (referencia_id, cuerpo, lat, lon, lado_m, tesela_m, res_m,
+                            version_metodo, fuente_coordenadas, n_subventanas, envolvente)
+                            VALUES (%s,'luna',-85,10,15000,3000,60,%s,'prueba',25,%s)""",
+                         (ref, version, Jsonb({**pend, "relieve_p95_p5_m": {"p10": relieve - 50, "p50": relieve,
+                                                                           "p90": relieve + 50}})))
+        conn.execute("""INSERT INTO celdas_busqueda (celda_id, lat_min, lon_min, zona)
+                        VALUES ('N40E040',40,40,'Exploración: prueba') ON CONFLICT DO NOTHING""")
+        conn.execute("""INSERT INTO contexto_modis (contexto_id, metadata, umbral_ndvi) VALUES ('zonas-test',%s,0.3)
+                        ON CONFLICT (unico) DO UPDATE SET contexto_id = EXCLUDED.contexto_id,
+                        metadata = EXCLUDED.metadata, umbral_ndvi = EXCLUDED.umbral_ndvi""",
+                     (Jsonb({"meses": ["2025-01", "2025-07"]}),))
+        conn.execute("""INSERT INTO sitios (sitio_id, cuerpo, lat, lon, fuente_coordenadas, geom, rol)
+                        VALUES ('TIE-ZONA-PRUEBA','tierra',40,41.2,'prueba',ST_SetSRID(ST_MakePoint(41.2,40),4326),
+                        'analogo_nasa') ON CONFLICT DO NOTHING""")
+        # Tres teselas a 3 km (0,0353° a 40° N) y una a ~85 km; la del medio solo cumple la segunda referencia.
+        for ix, lon, relieve in ((0, 40, 200), (1, 40.0353, 400), (2, 40.0706, 200), (3, 41, 200)):
+            conn.execute("""INSERT INTO teselas (celda_id, res_m, version_metodo, ix, iy, lat, lon, geom,
+                            pendiente_mediana, pendiente_p90, relieve, rugosidad, fraccion_valida,
+                            ndvi_max, ndvi_n, contexto_id)
+                            VALUES ('N40E040',60,%s,%s,0,40,%s,ST_MakeEnvelope(%s,39.9865,%s,40.0135,4326),
+                            6,13,%s,1,1,.1,2,'zonas-test')""",
+                         (version, ix, lon, lon - .01765, lon + .01765, relieve))
+        trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .3}, "N40E040")
+        rows = conn.execute("""SELECT zona_id, n_teselas, referencias, es_zona, conocida, region,
+                               round(sitio_cercano_km), round(lon_min::numeric, 3)::float8, round(lon_max::numeric, 3)::float8
+                               FROM zonas_candidatas WHERE version_metodo = %s ORDER BY n_teselas DESC""",
+                            (version,)).fetchall()
+        assert rows == [("N40E040~0~0", 3, ["LUN-Z1", "LUN-Z2"], True, False, "Exploración: prueba", 96, 39.982, 40.088),
+                        ("N40E040~3~0", 1, ["LUN-Z1"], False, True, "Exploración: prueba", 17, 40.982, 41.018)]
+        trabajador.candidatos(conn, {"ndvi_umbral_vegetacion": .3, "agrupacion": {"min_teselas": 4}}, "N40E040")
+        assert conn.execute("SELECT count(*) FROM zonas_candidatas WHERE version_metodo = %s AND es_zona",
+                            (version,)).fetchone()[0] == 0
+        conn.rollback()
 
 
 @pytest.mark.skipif(not DSN, reason="Requiere PostgreSQL + PostGIS desechable")
@@ -429,6 +486,7 @@ def test_catalog_metadata_and_live_status_without_recomputing_terrain(monkeypatc
         assert state.status_code == 200
         worker = next(w for w in state.json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")
         assert worker["senal_reciente"] and worker["estado"] == "procesando" and worker["celdas_elegibles"] == 100
+        assert {"zonas_candidatas", "zonas_lejos_de_analogos_conocidos", "candidatas_aisladas"} <= set(state.json())
         conn.execute("UPDATE trabajadores SET actualizado_utc=now()-interval '10 minutes' WHERE trabajador_id='worker-prueba'")
         conn.commit()
         worker = next(w for w in client.get("/api/search/status").json()["trabajadores"] if w["trabajador_id"] == "worker-prueba")
